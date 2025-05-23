@@ -148,27 +148,6 @@ def enzymes_in_condensate(input_file, times, n_enz, eps=1.0, min_sample=2):
             n_chains_arr[i] = enzyme_in_condensate_from_dbscan(frame, n_enz, eps, min_sample)
 
     return n_chains_arr
-
-
-def pSer_dilute_from_dbscan(frame, eps=1.0, min_sample=2):
-    
-    positions = frame.particles.position
-    type_ids = frame.particles.typeid[:30800]
-    
-    db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(positions)
-    labels = db.labels_
-    values, counts = np.unique(labels[:30800], return_counts=True)
-    condensate_idx = values[np.argmax(counts)]
-    dilute_ids = type_ids[ labels[:30800] != condensate_idx ]
-    
-    if len(dilute_ids)%154 == 0:
-        n_chains_dilute = int( len(dilute_ids)/154 )
-        print(f'n chains dilute: {n_chains_dilute}')
-        pSer_per_chain = np.array([ np.sum( dilute_ids[154*ichain:154*(ichain+1)]==20 ) for ichain in range(n_chains_dilute) ])
-    else:
-        raise ValueError(f'Some chains are split between condensate and dilute! {len(dilute_ids)} monomers in dilute.')
-             
-    return pSer_per_chain
     
 
 def pSer_dilute_from_dbscan(frame, eps=1.0, min_sample=2):
