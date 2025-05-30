@@ -1,6 +1,4 @@
 import numpy as np
-import gsd.hoomd
-from tqdm import tqdm
 
 def average(sample, n_term=0):
     ''' sample average 
