@@ -151,3 +151,21 @@ def process_trajectory(input_file, output_file, diss_time, therm=0, center_id=30
 
                 # Append the frame to the output GSD file
                 output_gsd.append(frame)
+                
+                
+def modify_particles_position(complete_frame, position_frame, id_init_compl=0, id_end_compl=None, id_init_pos=0, id_end_pos=None, save=None):
+
+    if id_end_pos==None:
+        id_end_pos = position_frame.particles.N
+    if id_end_compl==None:
+        id_end_compl = id_init_compl+(id_end_pos-id_init_pos)
+        
+    complete_frame.particles.position[id_init_compl:id_end_compl] = position_frame.particles.position[id_init_pos:id_end_pos] 
+    
+    if save is None:
+        return complete_frame
+    else:
+        with gsd.hoomd.open(save, 'wb') as f:
+            f.append(complete_frame)
+    
+    
