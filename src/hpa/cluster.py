@@ -1,4 +1,10 @@
 import numpy as np
+import gsd.hoomd
+from scipy.optimize import curve_fit
+from tqdm import tqdm
+import gsd.hoomd
+from sklearn import cluster as cl
+import scipy as sci
 
 def nphospho_in_time(input_file, times):
     n_phospho_arr = np.zeros(len(times))
