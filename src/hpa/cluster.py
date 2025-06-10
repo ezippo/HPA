@@ -11,7 +11,7 @@ def nphospho_in_time(input_file, times):
     return n_phospho_arr
 
 
-def condensate_size_from_dbscan(frame, n_enz, eps=1.0, min_sample=2):
+def condensate_size_from_dbscan(frame, eps=1.0, min_sample=2):
     
     positions = frame.particles.position
     db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(positions)
@@ -22,7 +22,7 @@ def condensate_size_from_dbscan(frame, n_enz, eps=1.0, min_sample=2):
     return np.max(counts)
     
     
-def chains_in_condensate(input_file, times, n_enz, eps=1.0, min_sample=2):
+def chains_in_condensate(input_file, times, eps=1.0, min_sample=2):
 
     n_chains_arr = np.zeros(len(times))
     n_phospho_arr = np.zeros(len(times))
@@ -31,7 +31,7 @@ def chains_in_condensate(input_file, times, n_enz, eps=1.0, min_sample=2):
         print(len(input_gsd))
         for i, tt in enumerate(tqdm(times)):
             frame = input_gsd[int(tt)]
-            n_p_condensate = condensate_size_from_dbscan(frame, n_enz, eps, min_sample)
+            n_p_condensate = condensate_size_from_dbscan(frame, eps, min_sample)
             n_chains_arr[i] = n_p_condensate/154.
             
             n_phospho_arr[i] = np.sum(frame.particles.typeid==20)
