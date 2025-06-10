@@ -19,13 +19,9 @@ def condensate_size_from_dbscan(frame, n_enz, eps=1.0, min_sample=2):
     values, counts = np.unique(labels[:30800], return_counts=True)
     condensate_idx = values[np.argmax(counts)]
     
-    if np.array_equal(labels[30800:30800+n_enz],[condensate_idx]*n_enz):
-        return np.max(counts)
-    else:
-        print(labels[30800:30800+n_enz],[condensate_idx])
-
-        return 0
-
+    return np.max(counts)
+    
+    
 def chains_in_condensate(input_file, times, n_enz, eps=1.0, min_sample=2):
 
     n_chains_arr = np.zeros(len(times))
