@@ -184,16 +184,20 @@ def plot_exponential_fits(counts, bins, ser_idx=None, same_rate=False, title=Non
     plt.show()
     
     
-def plot_dist(dist, ser_id=0, start=0, end=None, jump=1, step_in_ps=100, fig_len=6, fig_hig=2.5, linewidth=0.4, ylabel=f"dist(SER, CK1$\delta$)"):
+def plot_dist(dist, mindist=False, part_id=0, start=0, end=None, jump=1, step_in_ps=100, fig_len=6, fig_hig=2.5, linewidth=0.4, ylabel=f"dist(SER, CK1$\delta$)"):
     if end==None:
         end_tmp = len(dist)
     else:
         end_tmp = end
-    
-    time = np.arange(start, end_tmp, jump)*step_in_ps
+    if mindist:
+        d = np.min(dist, axis=1)[start:end_tmp:jump]
+    else:
+        d = dist[start:end_tmp:jump,part_id]
+        
+    time = np.arange(start, end_tmp, jump)*step_in_ps/1000000
     
     plt.figure(figsize=(fig_len,fig_hig))
-    plt.plot(time/1000000, dist[start:end_tmp:jump,ser_id], linewidth=linewidth)
+    plt.plot(time, d, linewidth=linewidth)
     plt.xlim(step_in_ps*(start-1)/1000000, step_in_ps*(1+end_tmp)/1000000)
     plt.xlabel(r't [$\mu$s]')
     plt.ylabel(ylabel)
