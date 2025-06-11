@@ -28,22 +28,29 @@ def condensate_size_from_dbscan(frame, eps=1.0, min_sample=2):
     return np.max(counts)
     
     
-def chains_in_condensate(input_file, times, eps=1.0, min_sample=2):
+def chains_in_condensate(dirpath, file_suffix, n_sims, times, eps=1.0, min_sample=2):
 
     n_chains_arr = np.zeros(len(times))
     n_phospho_arr = np.zeros(len(times))
     
-    with gsd.hoomd.open(input_file, 'rb') as input_gsd:
-        print(len(input_gsd))
-        for i, tt in enumerate(tqdm(times)):
-            frame = input_gsd[int(tt)]
-            n_p_condensate = condensate_size_from_dbscan(frame, eps, min_sample)
-            n_chains_arr[i] = n_p_condensate/154.
-            
-            n_phospho_arr[i] = np.sum(frame.particles.typeid==20)
-            
-    return n_chains_arr, n_phospho_arr
+    for i in range(1,n_sims+1):
+        tmp_nc_5ck1d = np.zeros(len(times))
+        tmp_np_5ck1d = np.zeros(len(times))
+        with gsd.hoomd.open(dirpath+f'sim{i}_'+file_suffix, 'rb') as input_gsd:
+            print(len(input_gsd))
+            for i, tt in enumerate(tqdm(times)):
+                frame = input_gsd[int(tt)]
+                tmp_nc_5ck1d[i] = condensate_size_from_dbscan(frame, eps, min_sample)/154.
+                tmp_np_5ck1d[i] = np.sum(frame.particles.typeid==20)
+        n_chains_arr += tmp_nc_5ck1d
+        n_phospho_arr += tmp_np_5ck1d
+    
+    n_chains_arr /= n_sims
+    n_phospho_arr /= n_sims
 
+    return n_chains_arr, n_phospho_arr
+    
+    
 
 def condensate_size_from_dbscan_pbc(frame, box, eps=1.0, min_sample=2):
     
