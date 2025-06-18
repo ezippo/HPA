@@ -169,3 +169,18 @@ def modify_particles_position(complete_frame, position_frame, id_init_compl=0, i
             f.append(complete_frame)
     
     
+def modify_particles_typeid(complete_frame, typeid_frame, id_init_compl=0, id_end_compl=None, id_init_tid=0, id_end_tid=None, save=None):
+
+    if id_end_tid==None:
+        id_end_tid = position_frame.particles.N
+    if id_end_compl==None:
+        id_end_compl = id_init_compl+(id_end_tid-id_init_tid)
+        
+    complete_frame.particles.typeid[id_init_compl:id_end_compl] = typeid_frame.particles.typeid[id_init_tid:id_end_tid] 
+    
+    if save is None:
+        return complete_frame
+    else:
+        with gsd.hoomd.open(save, 'wb') as f:
+            f.append(complete_frame)
+    

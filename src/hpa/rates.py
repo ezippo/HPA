@@ -102,7 +102,7 @@ def estimator_rate_single_exponential(dirpath, file_suffix, ser_l, n_sims, max_t
     return rates, d_r
 
 
-def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, len_prot=154, n_prot=1, start=None, end=None, max_dist=None, nenz=1):
+def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, len_prot=154, n_prot=1, start=None, end=None, max_dist=None, nenz=[1]):
     """
     Counts the number of contacts (or specific kinds of contacts) in simulations.
 
@@ -121,7 +121,7 @@ def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, le
         tuple: The average count of contacts across simulations and the standard error of the counts.
     """
 
-    if nenz==2:
+    if len(nenz)==2:
         counts1 = []
         counts2 = []
     else:
@@ -150,9 +150,9 @@ def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, le
         if max_dist is not None:
             tmp = tmp[tmp[:, 3] < max_dist]
             
-        if nenz==2:
-            tmp1 = tmp[tmp[:, 5]==0]
-            tmp2 = tmp[tmp[:, 5]==1]
+        if len(nenz)==2:
+            tmp1 = tmp[tmp[:, 5]<nenz[0]]
+            tmp2 = tmp[tmp[:, 5]>=nenz[0]]
             # Calculate the number of contacts for each serial in ser_l across proteins
             sim_counts1 = [
                 sum(len(np.where(tmp1[:, 1] == i + len_prot * j )[0]) for j in range(n_prot))
@@ -173,7 +173,7 @@ def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, le
             counts.append(sim_counts)
         
     # Calculate the average count and the standard error across simulations
-    if nenz==2:
+    if len(nenz)==2:
         count_average1 = np.mean(counts1, axis=0)
         count_err1 = np.std(counts1, axis=0)/np.sqrt(len(sims_list)-1)
         count_average2 = np.mean(counts2, axis=0)
