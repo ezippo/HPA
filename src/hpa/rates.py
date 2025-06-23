@@ -6,6 +6,148 @@ import tqdm
 
 from matplotlib import cm
 from matplotlib.colors import Normalize
+from MDAnalysis.analysis.base import AnalysisBase
+from MDAnalysis.analysis.distances import distance_array
+
+
+class Findmultichainscontactarray(AnalysisBase):
+    def __init__(self, atomgroup, n_chain_1, n_chain_2, n_residue_1, n_residue_2, skip_in=0, skip_res=0, cut_off=5,
+                backend="serial", verbose=True):
+        self.atomgroup = atomgroup
+        self.n_chain_1 = n_chain_1
+        self.n_residue_1 = n_residue_1
+        self.n_chain_2 = n_chain_2
+        self.n_residue_2 = n_residue_2
+        self.radius = cut_off
+        self.skip = skip_res
+        self.skip_in = skip_in
+        
+        self.backend = backend
+        
+        trajectory = atomgroup.universe.trajectory
+        print(trajectory.n_frames)
+        super(Findmultichainscontactarray, self).__init__(trajectory,
+                                               verbose=verbose)
+        
+    def _prepare(self):
+        # This must go here, instead of __init__, because
+        # it depends on the number of frames specified in run().
+            
+        self.results = np.zeros((
+            int((self.stop-self.start)/self.step),
+            self.n_residue_1,
+            self.n_residue_2))
+        
+        print(self.results.shape)
+        
+        
+    def _single_frame(self):
+        chain_in_contact_ar = inter_multichain_contact_array_simple(
+            self.atomgroup, self.n_chain_1, self.n_chain_2, self.n_residue_1, self.n_residue_2,
+            self.skip_in, self.skip, self._ts.dimensions,
+            backend=self.backend, cutoff=self.radius)  
+        #print(chain_in_contact_ar)
+        self.results[self._frame_index, :, :] = chain_in_contact_ar
+        
+    def _conclude(self):
+        return self.results
+    
+
+class Find2singlechainscontactarray(AnalysisBase):
+    def __init__(self, atomgroup, start_chain1,end_chain1, start_chain2, end_chain2, cut_off=5,
+                backend="serial", verbose=True):
+        self.atomgroup = atomgroup
+        self.start_chain1 = start_chain1
+        self.end_chain1 = end_chain1
+        self.start_chain2 = start_chain2
+        self.end_chain2 = end_chain2
+        self.radius = cut_off
+        
+        self.backend = backend
+        
+        trajectory = atomgroup.universe.trajectory
+        print(trajectory.n_frames)
+        super(Find2singlechainscontactarray, self).__init__(trajectory,
+                                               verbose=verbose)
+        
+    def _prepare(self):
+        # This must go here, instead of __init__, because
+        # it depends on the number of frames specified in run().
+            
+        self.results = np.zeros((
+            int((self.stop-self.start)/self.step),
+            self.end_chain1-self.start_chain1+1,
+            self.end_chain2-self.start_chain2+1))
+        
+        print(self.results.shape)
+        
+        
+    def _single_frame(self):
+        chain_in_contact_ar = inter_2chains_contact_array_simple(
+            self.atomgroup, self.start_chain1, self.end_chain1, self.start_chain2, self.end_chain2,
+            self._ts.dimensions,
+            backend=self.backend, cutoff=self.radius)  
+        #print(chain_in_contact_ar)
+        self.results[self._frame_index, :, :] = chain_in_contact_ar
+        
+    def _conclude(self):
+        return self.results
+       
+
+def inter_2chains_contact_array_simple(uni,start_chain1,end_chain1,start_chain2,end_chain2, dimensions, cutoff=5, backend="serial"):
+    
+    contact_dist_ar = np.zeros((end_chain1-start_chain1+1, end_chain2-start_chain2+1)) #make an array for loading the distances
+    
+    sel_chain1 = uni.select_atoms('index {}:{}'.format(start_chain1,end_chain1))
+    sel_chain2 = uni.select_atoms('index {}:{}'.format(start_chain2,end_chain2))
+
+    distmat = distance_array(sel_chain1.atoms.positions, sel_chain2.atoms.positions, 
+                                result=np.zeros((sel_chain1.atoms.n_atoms, sel_chain2.atoms.n_atoms)),
+                               box=dimensions, backend='serial')
+
+    if isinstance(cutoff,float):
+        cutoff = np.asarray(cutoff)
+
+    y = distmat <= cutoff
+
+    #load values of y (less than cutoff)
+    contact_dist_ar += y
+
+    return contact_dist_ar
+
+def inter_multichain_contact_array_simple(uni, n_chain_1,n_chain_2,n_residue_1,n_residue_2, skip_in, skip, dimensions, cutoff=5, backend="serial", exclude_nearest_neighbors=0):
+    
+    contact_dist_ar = np.zeros((n_residue_1, n_residue_2)) #make an array for loading the distances
+    
+    start_chain2 = n_residue_1*n_chain_1 + skip + skip_in #number to add and define the another set of chains
+    
+    #going through all chains1
+    for i in range(n_chain_1):
+        ini1 = i*n_residue_1 + skip_in
+        fin1 = ((i+1)*n_residue_1)-1  + skip_in
+        #print(ini1,fin1)
+        sel_chain_i = uni.select_atoms('index {}:{}'.format(ini1,fin1))
+        for j in range(n_chain_2):
+            ini2 = start_chain2 + j*n_residue_2 
+            fin2 = start_chain2 + ((j+1)*n_residue_2) -1
+            #print(ini2,fin2)
+            sel_chain_j = uni.select_atoms('index {}:{}'.format(ini2,fin2))
+            
+            
+            
+            distmat = distance_array(sel_chain_i.atoms.positions, sel_chain_j.atoms.positions, 
+                                    result=np.zeros((sel_chain_i.atoms.n_atoms, sel_chain_j.atoms.n_atoms)),
+                                   box=dimensions, backend='serial')
+            
+            if isinstance(cutoff,float):
+                cutoff = np.asarray(cutoff)
+                
+            y = distmat <= cutoff
+            
+            #load values of y (less than cutoff)
+            contact_dist_ar += y
+            
+    return contact_dist_ar
 
 
 def time_of_contacts(contacts, ser_l, start=None, end=None, type_of_contact=None, empty=False):
@@ -275,3 +417,22 @@ def histogram_phosphorylation_times(dirpath, file_suffix, ser_idx, n_sims, max_t
     return counts, bins
 
 
+def pSer_per_chain(dirpath, file_suffix, ser_l, n_sims, times, len_prot=154, n_prot=2):
+    
+    if isinstance(n_sims, int):
+        sims_list = [s for s in range(n_sims)]
+    elif isinstance(n_sims, list):
+        sims_list = n_sims
+    else:
+        raise ValueError('n_sims must be int or list of int!')
+        
+    pSer_per_chain = np.zeros((len(sims_list)*n_prot, len(times)))
+    for ns, s in enumerate(sims_list):
+        with gsd.hoomd.open(dirpath+f"/sim{s+1}_{file_suffix}", 'rb') as input_gsd:
+            for i, tt in enumerate(tqdm(times)):
+                frame = input_gsd[int(tt)]
+                type_ids = frame.particles.typeid[:len_prot*n_prot]
+                pSer_per_chain[ns*n_prot:(ns+1)*n_prot, i] = [ np.sum( type_ids[len_prot*ichain:len_prot*(ichain+1)]==20 ) for ichain in range(n_prot) ]
+
+    return np.mean(pSer_per_chain, axis=0), np.std(pSer_per_chain, axis=0)/np.sqrt(len(sims_list)*n_prot -1)
+    
