@@ -48,6 +48,17 @@ def autocorr_bin(sample, pow_bin_max=10, n_term=0):
     plt.show()
 
 
+def compute_radius_of_gyration(positions, masses):
+    """
+    Compute the radius of gyration for a set of unwrapped positions.
+    """
+    total_mass = np.sum(masses)
+    center_of_mass = np.average(positions, axis=0, weights=masses)
+    squared_distances = np.sum(((positions - center_of_mass) ** 2), axis=1)
+    Rg_squared = np.sum(masses * squared_distances) / total_mass
+    return np.sqrt(Rg_squared)
+
+
 def unwrap_positions(positions, box, prev_positions=None):
     """
     Unwrap particle positions in a periodic box.
