@@ -1,6 +1,7 @@
 import numpy as np
 import gsd.hoomd
 from tqdm import tqdm
+import MDAnalysis as mda
 
 def average(sample, n_term=0):
     ''' sample average 
@@ -195,3 +196,34 @@ def modify_particles_typeid(complete_frame, typeid_frame, id_init_compl=0, id_en
         with gsd.hoomd.open(save, 'wb') as f:
             f.append(complete_frame)
     
+    
+def create_distance_file(filename, id1, id2, mean1=True, therm=0, max_time=None, save=None):
+        
+    u = mda.Universe(filename)
+    ag = u.atoms               
+    n_atoms = len(ag)
+
+    if max_time is None:
+        end = len(u.trajectory)
+    else:
+        end = max_time
+
+    n_steps = len(u.trajectory[therm:end])
+
+    if mean1:
+        dist = np.empty((n_steps,len(id2)))
+    else:
+        dist = np.empty((n_steps,len(id1),len(id2)))
+    for i,ts in enumerate(tqdm(u.trajectory[therm:end])):
+        aCK1d = u.atoms[id1]   # check molecules order in simulation dump file
+        tdp = u.atoms[id2]
+        if mean1:
+            tmp = mda.analysis.distances.distance_array(aCK1d.positions, tdp, box=u.dimensions)
+            dist[i] = np.mean(tmp, axis=0) 
+        else:
+            dist[i] = mda.analysis.distances.distance_array(aCK1d.positions, tdp, box=u.dimensions)
+
+    if save is not None:
+        np.savetxt(save, dist)
+    
+    return dist

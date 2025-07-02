@@ -1,6 +1,36 @@
 import numpy as np
 import pyemma
 
+def zeros_stretch(a, tps_state_num=0):
+    """
+    Parameters:
+    """
+    # https://stackoverflow.com/questions/24885092/finding-the-consecutive-zeros-in-a-numpy-array
+    # 0 where a is not zero (stable state), 1 where a is 0 (transition path)
+    tps = np.concatenate(([tps_state_num], np.equal(a, tps_state_num).view(np.int8),
+                          [tps_state_num]))
+    # crucial step is to calculate the discrete differences between neighbours in the array
+    abs_neighbour_diff = np.abs(np.diff(tps))
+    # return the start and end points of the zero stretches, at these points difference is 1 
+    return np.where(abs_neighbour_diff ==1 )[0].reshape(-1,2)
+
+def split_tp_ar(ar, tps_idx,verbose=False):
+    N = len(ar)
+    for tp in tps_idx:
+        # exclude TPs that don't end with the trajectory
+        #if tp[1] < N-1:
+        tp_start, tp_end = tp
+        tp_len = tp_end - tp_start
+        # first half will be longer for odd-lengths arrays
+        second_half = tp_len / 2  + tp_len % 2 + tp_start
+        if verbose:
+#           print('assigned second half of transition path starting at {} to product state {}).format(int(second_half), int(tp_end)))
+           print('start of second half of transition path, end transition path')
+           print(int(second_half), int(tp_end))
+        # assigns second half to product state
+        #print tp_end
+        ar[int(second_half):int(tp_end)] = ar[int(tp_end)]
+    return ar        
 
 def transition_filter_state_trj(cba_ar, split_state_tp=True,
                                 return_trans_start_end=False, tps_state_num=0, verbose=False):
