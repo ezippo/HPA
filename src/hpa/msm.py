@@ -175,6 +175,53 @@ def create_states_trajectory(boundtraj, phosphotraj, save=None):
         np.savetxt(save, states, fmt='%d')  # Save as integer values
     else:
         return states
+        
+        
+def create_states_trajectory_2enzymes(boundtraj_1, boundtraj_2, phosphotraj, save=None):
+    """
+    Generates a state trajectory based on phosphorylation and binding states.
+    The state values are:
+                 - 1: Unphosphorylated, enz1 unbound, enz2 unbound.
+                 - 2: Unphosphorylated, enz1 bound, enz2 unbound.
+                 - 3: Unphosphorylated, enz1 unbound, enz2 bound.
+                 - 4: Unphosphorylated, enz1 bound, enz2 bound.                 
+                 - 5: Phosphorylated, enz1 unbound, enz2 unbound.                 
+                 - 6: Phosphorylated, enz1 bound, enz2 unbound.                 
+                 - 7: Phosphorylated, enz1 unbound, enz2 bound.                 
+                 - 8: Phosphorylated, enz1 bound, enz2 bound.                 
+    Args:
+        boundtraj_1 (ndarray): Boolean array where each element represents the binding state 
+                             at a given time step (True for bound, False for unbound) for enzyme 1.
+        boundtraj_2 (ndarray): Boolean array where each element represents the binding state 
+                             at a given time step (True for bound, False for unbound) for enzyme 2.
+        phosphotraj (ndarray): Boolean array where each element represents the phosphorylation state 
+                               at a given time step (True for phosphorylated, False for unphosphorylated).
+        save (str, optional): File path to save the state trajectory as a text file. If None, returns 
+                              the state array. Defaults to None.
+
+    Returns:
+        ndarray: An array representing the state trajectory at each time step if `save` is None.
+                 
+    """
+    # Initialize the state array with zeros
+    states = np.zeros(len(phosphotraj), dtype=int)
+
+    # Define states based on phosphorylation and binding trajectories
+    states[~phosphotraj & ~boundtraj_1 & ~boundtraj_2] = 1  
+    states[~phosphotraj & boundtraj_1 & ~boundtraj_2] = 2   
+    states[~phosphotraj & ~boundtraj_1 & boundtraj_2] = 3   
+    states[~phosphotraj & boundtraj_1 & boundtraj_2] = 4   
+    states[phosphotraj & ~boundtraj_1 & ~boundtraj_2] = 5  
+    states[phosphotraj & boundtraj_1 & ~boundtraj_2] = 6   
+    states[phosphotraj & ~boundtraj_1 & boundtraj_2] = 7   
+    states[phosphotraj & boundtraj_1 & boundtraj_2] = 8   
+
+    # Save the state trajectory to file if 'save' is provided, otherwise return the array
+    if save is not None:
+        np.savetxt(save, states, fmt='%d')  # Save as integer values
+    else:
+        return states
+
 
 def dmu_estimate(dtraj, lag=1, kT=3*0.831446, n_term=0):
     msm = pyemma.msm.bayesian_markov_model(dtraj, lag=lag, reversible=False)
@@ -199,7 +246,7 @@ def bootstrap_dmu_estimate(dtraj, lag=1, pow_bin=0, n_resample=100, n_term=0):
     
     mu = np.array([ dmu_estimate(dtraj_resample[i], lag=lag) for i in range(n_resample) ])
     
-    return np.sqrt(((mu - average(mu))**2).sum()/n_resample)
+    return np.sqrt(((mu - np.mean(mu))**2).sum()/n_resample)
 
 
 def split_dmu_estimates(dtraj, lag=1, kT=3*0.831446, n_term=0):
