@@ -219,8 +219,8 @@ def create_states_trajectory_2enzymes(boundtraj_1, boundtraj_2, phosphotraj, sav
     # Save the state trajectory to file if 'save' is provided, otherwise return the array
     if save is not None:
         np.savetxt(save, states, fmt='%d')  # Save as integer values
-    else:
-        return states
+
+    return states
 
 
 def dmu_estimate(dtraj, lag=1, kT=3*0.831446, n_term=0):
