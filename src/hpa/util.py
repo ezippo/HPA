@@ -2,6 +2,7 @@ import numpy as np
 import gsd.hoomd
 from tqdm import tqdm
 import MDAnalysis as mda
+from matplotlib import pyplot as plt
 
 def average(sample, n_term=0):
     ''' sample average 
