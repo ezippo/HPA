@@ -183,11 +183,11 @@ def create_states_trajectory_2enzymes(boundtraj_1, boundtraj_2, phosphotraj, sav
     The state values are:
                  - 1: Unphosphorylated, enz1 unbound, enz2 unbound.
                  - 2: Unphosphorylated, enz1 bound, enz2 unbound.
-                 - 3: Unphosphorylated, enz1 unbound, enz2 bound.
-                 - 4: Unphosphorylated, enz1 bound, enz2 bound.                 
-                 - 5: Phosphorylated, enz1 unbound, enz2 unbound.                 
-                 - 6: Phosphorylated, enz1 bound, enz2 unbound.                 
-                 - 7: Phosphorylated, enz1 unbound, enz2 bound.                 
+                 - 3: Phosphorylated, enz1 bound, enz2 unbound.                 
+                 - 4: Phosphorylated, enz1 unbound, enz2 unbound.                 
+                 - 5: Phosphorylated, enz1 unbound, enz2 bound.  
+                 - 6: Unphosphorylated, enz1 unbound, enz2 bound.
+                 - 7: Unphosphorylated, enz1 bound, enz2 bound.                 
                  - 8: Phosphorylated, enz1 bound, enz2 bound.                 
     Args:
         boundtraj_1 (ndarray): Boolean array where each element represents the binding state 
@@ -209,11 +209,11 @@ def create_states_trajectory_2enzymes(boundtraj_1, boundtraj_2, phosphotraj, sav
     # Define states based on phosphorylation and binding trajectories
     states[~phosphotraj & ~boundtraj_1 & ~boundtraj_2] = 1  
     states[~phosphotraj & boundtraj_1 & ~boundtraj_2] = 2   
-    states[~phosphotraj & ~boundtraj_1 & boundtraj_2] = 3   
-    states[~phosphotraj & boundtraj_1 & boundtraj_2] = 4   
-    states[phosphotraj & ~boundtraj_1 & ~boundtraj_2] = 5  
-    states[phosphotraj & boundtraj_1 & ~boundtraj_2] = 6   
-    states[phosphotraj & ~boundtraj_1 & boundtraj_2] = 7   
+    states[~phosphotraj & ~boundtraj_1 & boundtraj_2] = 6   
+    states[~phosphotraj & boundtraj_1 & boundtraj_2] = 7   
+    states[phosphotraj & ~boundtraj_1 & ~boundtraj_2] = 4  
+    states[phosphotraj & boundtraj_1 & ~boundtraj_2] = 3   
+    states[phosphotraj & ~boundtraj_1 & boundtraj_2] = 5   
     states[phosphotraj & boundtraj_1 & boundtraj_2] = 8   
 
     # Save the state trajectory to file if 'save' is provided, otherwise return the array
