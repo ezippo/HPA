@@ -2,12 +2,13 @@ import numpy as np
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
 import time
-import tqdm
+from tqdm import tqdm
 
 from matplotlib import cm
 from matplotlib.colors import Normalize
 from MDAnalysis.analysis.base import AnalysisBase
 from MDAnalysis.analysis.distances import distance_array
+import gsd
 
 
 class Findmultichainscontactarray(AnalysisBase):
