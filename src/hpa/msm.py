@@ -1,5 +1,6 @@
 import numpy as np
 import pyemma
+import deeptime
 
 def zeros_stretch(a, tps_state_num=0):
     """
@@ -249,7 +250,7 @@ def bootstrap_dmu_estimate(dtraj, lag=1, kT=3*0.831446, pow_bin=0, n_resample=10
     return np.sqrt(((mu - np.mean(mu))**2).sum()/n_resample)
 
 def dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, n_term=0, reversible=False):
-    counts = deeptime.markov.TransitionCountEstimator(lagtime=10, count_mode='effective').fit_fetch(dtraj)
+    counts = deeptime.markov.TransitionCountEstimator(lagtime=lag, count_mode='effective').fit_fetch(dtraj)
     msm = deeptime.markov.msm.MaximumLikelihoodMSM(reversible=reversible).fit_fetch(counts)
     t_matrix = msm.transition_matrix
     matrix_size = len(t_matrix)
