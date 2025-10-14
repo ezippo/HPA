@@ -234,7 +234,7 @@ def dmu_estimate(dtraj, lag=1, kT=3*0.831446, n_term=0):
         anti_cycle *= t_matrix[i+1,i]
     return kT*np.log(cycle/anti_cycle)
 
-def bootstrap_dmu_estimate(dtraj, lag=1, pow_bin=0, n_resample=100, n_term=0):
+def bootstrap_dmu_estimate(dtraj, lag=1, kT=3*0.831446, pow_bin=0, n_resample=100, n_term=0):
     dim_bin = int(2**pow_bin)
     n_bin = int(( len(dtraj)-n_term )/ dim_bin)    
     N = n_bin * dim_bin
@@ -244,10 +244,35 @@ def bootstrap_dmu_estimate(dtraj, lag=1, pow_bin=0, n_resample=100, n_term=0):
 
     dtraj_resample = np.array([ np.reshape( np.array([ dtraj_list[i] for i in rnd_matrix[k] ]), N ) for k in range(n_resample) ])
     
-    mu = np.array([ dmu_estimate(dtraj_resample[i], lag=lag) for i in range(n_resample) ])
+    mu = np.array([ dmu_estimate(dtraj_resample[i], lag=lag, kT=kT, n_term=n_term) for i in range(n_resample) ])
     
     return np.sqrt(((mu - np.mean(mu))**2).sum()/n_resample)
 
+def dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, n_term=0, reversible=False):
+    counts = markov.TransitionCountEstimator(lagtime=10, count_mode='effective').fit_fetch(dtraj)
+    msm = markov.msm.MaximumLikelihoodMSM(reversible=reversible).fit_fetch(counts)
+    t_matrix = msm.transition_matrix
+    matrix_size = len(t_matrix)
+    cycle = t_matrix[matrix_size-1,0]
+    anti_cycle = t_matrix[0,matrix_size-1]
+    for i in range(matrix_size-1):
+        cycle *= t_matrix[i,i+1]
+        anti_cycle *= t_matrix[i+1,i]
+    return kT*np.log(cycle/anti_cycle)
+
+def bootstrap_dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, pow_bin=0, n_resample=100, n_term=0):
+    dim_bin = int(2**pow_bin)
+    n_bin = int(( len(dtraj)-n_term )/ dim_bin)    
+    N = n_bin * dim_bin
+    dtraj_list = np.reshape( dtraj[n_term: n_term+N], (n_bin, dim_bin) )
+    
+    rnd_matrix = np.random.randint(n_bin, size=(n_resample,n_bin))
+
+    dtraj_resample = np.array([ np.reshape( np.array([ dtraj_list[i] for i in rnd_matrix[k] ]), N ) for k in range(n_resample) ])
+    
+    mu = np.array([ dmu_estimate_deeptime(dtraj_resample[i], lag=lag, kT=kT, n_term=n_term) for i in range(n_resample) ])
+    
+    return np.sqrt(((mu - np.mean(mu))**2).sum()/n_resample)
 
 def split_dmu_estimates(dtraj, lag=1, kT=3*0.831446, n_term=0):
     msm = pyemma.msm.bayesian_markov_model(dtraj, lag=lag, reversible=False)
