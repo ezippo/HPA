@@ -277,6 +277,7 @@ def center_trajectory(input_gsd, output_gsd, group=None, cluster=False, eps=2.0,
         new_frame = gsd.hoomd.Frame()
         new_frame.configuration = frame.configuration
         new_frame.particles = frame.particles
+        new_frame.bonds = frame.bonds
 
         pos = frame.particles.position.copy()
         selected_pos = pos[group]
