@@ -4,6 +4,7 @@ from tqdm import tqdm
 import MDAnalysis as mda
 from matplotlib import pyplot as plt
 from sklearn.cluster import DBSCAN
+import copy
 
 def average(sample, n_term=0):
     ''' sample average 
@@ -274,53 +275,124 @@ def center_trajectory(input_gsd, output_gsd, group=None, cluster=False, eps=2.0,
         group = np.array(group)
 
     for frame in tqdm(traj_in):
-        new_frame = gsd.hoomd.Frame()
-        new_frame.configuration = frame.configuration
-        new_frame.particles = frame.particles
-        new_frame.bonds = frame.bonds
+        new_frame = copy.deepcopy(frame)
+        pos = new_frame.particles.position
+        img = new_frame.particles.image
+        box = frame.configuration.box
+        Lx, Ly, Lz = box[:3]
 
-        pos = frame.particles.position.copy()
-        selected_pos = pos[group]
-
-        # Per-particle masses from frame
+        # Unwrap positions to handle clusters across PBCs
+        unwrap_pos = pos + img * np.array([Lx, Ly, Lz])
+        selected_pos = unwrap_pos[group]
         masses = frame.particles.mass[group]
 
+        # Compute COM (of largest cluster or all)
         if cluster:
-            # Detect clusters in 3D using DBSCAN
             db = DBSCAN(eps=eps, min_samples=min_samples).fit(selected_pos)
             labels = db.labels_
-
-            # Find largest cluster (ignore noise = -1)
             unique, counts = np.unique(labels[labels >= 0], return_counts=True)
             if len(unique) == 0:
-                raise RuntimeError("No clusters detected with DBSCAN. Try increasing eps.")
-            largest_cluster_label = unique[np.argmax(counts)]
-            cluster_indices = np.where(labels == largest_cluster_label)[0]
+                raise RuntimeError("No clusters detected. Try increasing eps.")
+            largest_label = unique[np.argmax(counts)]
+            cluster_indices = np.where(labels == largest_label)[0]
             cluster_pos = selected_pos[cluster_indices]
             cluster_masses = masses[cluster_indices]
-
-            # COM of largest cluster
             cm = np.average(cluster_pos, axis=0, weights=cluster_masses)
         else:
-            # COM of all selected particles
             cm = np.average(selected_pos, axis=0, weights=masses)
 
-        # Shift all positions so COM → origin
-        pos -= cm
-        
-        Lx, Ly, Lz = frame.configuration.box[:3]
-        pos[:, 0] -= np.floor(pos[:, 0] / Lx + 0.5) * Lx
-        pos[:, 1] -= np.floor(pos[:, 1] / Ly + 0.5) * Ly
-        pos[:, 2] -= np.floor(pos[:, 2] / Lz + 0.5) * Lz
+        # --- Shift COM to origin ---
+        unwrap_pos -= cm
 
-        # Reset images since we re-wrapped
-        new_frame.particles.image[:] = 0
+        # --- Wrap back into box centered at origin (-L/2, L/2) ---
+        pos_wrapped = np.empty_like(unwrap_pos)
+        pos_wrapped[:, 0] = ((unwrap_pos[:, 0] + 0.5 * Lx) % Lx) - 0.5 * Lx
+        pos_wrapped[:, 1] = ((unwrap_pos[:, 1] + 0.5 * Ly) % Ly) - 0.5 * Ly
+        pos_wrapped[:, 2] = ((unwrap_pos[:, 2] + 0.5 * Lz) % Lz) - 0.5 * Lz
 
-        new_frame.particles.position = pos
+        # Update frame
+        new_frame.particles.position = pos_wrapped
+        new_frame.particles.image[:] = 0  # reset image flags
+
         traj_out.append(new_frame)
 
     traj_out.close()
-            
+    
+
+def center_trajectory_z(input_gsd, output_gsd, group=None, cluster=False, eps=2.0, min_samples=1):
+    """
+    Center a slab configuration along the z-axis only.
+    Works even if the system percolates in x/y.
+
+    Parameters
+    ----------
+    input_gsd : str
+        Input GSD trajectory file.
+    output_gsd : str
+        Output GSD trajectory file (centered).
+    group : list of int or None
+        Particle indices to consider. If None, include all.
+    cluster : bool
+        If True, detect clusters and center only the largest cluster.
+    eps : float
+        Maximum distance between two samples for DBSCAN clustering.
+    min_samples : int
+        Minimum number of neighbors for DBSCAN clustering.
+    """
+
+    traj_in = gsd.hoomd.open(input_gsd, 'rb')
+    traj_out = gsd.hoomd.open(output_gsd, 'wb')
+
+    n_particles = traj_in[0].particles.N
+    if group is None:
+        group = np.arange(n_particles)
+    else:
+        group = np.array(group)
+
+    for frame in tqdm(traj_in):
+        new_frame = copy.deepcopy(frame)
+
+        pos = frame.particles.position.copy()
+        img = frame.particles.image.copy()
+        box = frame.configuration.box
+        Lx, Ly, Lz = box[:3]
+
+        # Unwrap along z only (important if slab crosses top/bottom boundary)
+        unwrap_z = pos[:, 2] + img[:, 2] * Lz
+        selected_z = unwrap_z[group]
+        masses = frame.particles.mass[group]
+
+        # --- Find COM along z ---
+        if cluster:
+            # Cluster using only z-coordinates (1D)
+            db = DBSCAN(eps=eps, min_samples=min_samples).fit(selected_z.reshape(-1, 1))
+            labels = db.labels_
+            unique, counts = np.unique(labels[labels >= 0], return_counts=True)
+            if len(unique) == 0:
+                raise RuntimeError("No clusters detected. Try increasing eps.")
+            largest_label = unique[np.argmax(counts)]
+            cluster_indices = np.where(labels == largest_label)[0]
+            cluster_z = selected_z[cluster_indices]
+            cluster_masses = masses[cluster_indices]
+            z_com = np.average(cluster_z, weights=cluster_masses)
+        else:
+            z_com = np.average(selected_z, weights=masses)
+
+        # --- Shift COM along z to center of box ---
+        unwrap_z -= z_com
+
+        # Assuming box centered at origin (-Lz/2, +Lz/2)
+        pos_wrapped = pos.copy()
+        pos_wrapped[:, 2] = ((unwrap_z + 0.5 * Lz) % Lz) - 0.5 * Lz
+
+        # Update positions and reset images
+        new_frame.particles.position = pos_wrapped
+        new_frame.particles.image[:] = 0
+
+        traj_out.append(new_frame)
+
+    traj_out.close()
+    
             
 def _process_trajectory(input_file, output_file, diss_time, therm=0, center_id=30800):
     # Open the input GSD file

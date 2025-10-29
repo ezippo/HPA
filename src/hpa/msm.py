@@ -101,7 +101,7 @@ def boundtraj_with_dist_criterion(dist, min_dist=10., max_dist=None, therm=0, en
     return np.array(filtered_dtraj[therm:end])
 
 
-def changes_to_phosphostate(changes, boolstart=0, step=10000, end_time=3000000000, save=None):
+def changes_to_phosphostate(changes, step=10000, end_time=3000000000, save=None):
     """
     Determines the phospho-state of a system over time based on recorded changes.
 
@@ -119,6 +119,12 @@ def changes_to_phosphostate(changes, boolstart=0, step=10000, end_time=300000000
     phosphobool = []  # List to hold phospho-state at each time step
     index = 0         # Index to track position in `changes`
     
+    if changes[0,2]==1 or changes[0,2]==10:
+        boolstart=0
+    else:
+        print(f'start with pSer: changes[0] = {changes[0,2]}')
+        boolstart=1
+        
     # Calculate initial state based on changes within the first step
     ch_count = np.sum(changes[index:, 0] <= step)  # Count changes up to `step`
     phosphobool.append(int(not boolstart) if ch_count % 2 else boolstart)
@@ -174,8 +180,7 @@ def create_states_trajectory(boundtraj, phosphotraj, save=None):
     # Save the state trajectory to file if 'save' is provided, otherwise return the array
     if save is not None:
         np.savetxt(save, states, fmt='%d')  # Save as integer values
-    else:
-        return states
+    return states
         
         
 def create_states_trajectory_2enzymes(boundtraj_1, boundtraj_2, phosphotraj, save=None):
