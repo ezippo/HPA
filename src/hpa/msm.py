@@ -266,6 +266,22 @@ def dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, n_term=0, reversible=Fals
         anti_cycle *= t_matrix[i+1,i]
     return kT*np.log(cycle/anti_cycle)
 
+def dmu_error_estimate(states, lag=1, kT=3*0.831446, pow_bin=0, n_resample=30, n_term=0, reversible=False):
+    tm = tmatrix_estimate_deeptime(states, lag=lag, kT=kT, reversible=reversible)
+    dtm = bootstrap_tmatrix_estimate_deeptime(states, lag=lag, kT=kT, pow_bin=pow_bin, n_resample=n_resample)
+    k_f = np.array([tm[0,1],tm[1,2],tm[2,3],tm[3,0]])
+    k_b = np.array([tm[1,0],tm[2,1],tm[3,2],tm[0,3]])
+    dk_f = np.array([dtm[0,1],dtm[1,2],dtm[2,3],dtm[3,0]])
+    dk_b = np.array([dtm[1,0],dtm[2,1],dtm[3,2],dtm[0,3]])
+    r_dk_f = dk_f/k_f
+    r_dk_b = dk_b/k_b
+    ratio = np.prod(k_f)/np.prod(k_b)
+    d_ratio = ratio*np.sqrt(np.sum(r_dk_f**2+r_dk_b**2))
+    dmu = kT*np.log(ratio)
+    d_dmu = kT*d_ratio/ratio
+    
+    return dmu, d_dmu
+
 def bootstrap_dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, pow_bin=0, n_resample=100, n_term=0):
     dim_bin = int(2**pow_bin)
     n_bin = int(( len(dtraj)-n_term )/ dim_bin)    
@@ -304,4 +320,24 @@ def bootstrap_split_dmu_estimates(dtraj, lag=1, pow_bin=0, n_resample=100, kT=3*
     mu = np.array([ split_dmu_estimates(dtraj_resample[i], lag=lag, kT=kT) for i in range(n_resample) ])
     
     return np.sqrt(np.sum((mu - np.sum(mu, axis=0)/n_resample)**2, axis=0)/n_resample)
+
+
+def tmatrix_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, n_term=0, reversible=False):
+    counts = deeptime.markov.TransitionCountEstimator(lagtime=lag, count_mode='effective').fit_fetch(dtraj[n_term:])
+    msm = deeptime.markov.msm.MaximumLikelihoodMSM(reversible=reversible).fit_fetch(counts)
+    return msm.transition_matrix
+
+def bootstrap_tmatrix_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, pow_bin=0, n_resample=100, n_term=0,reversible=False):
+    dim_bin = int(2**pow_bin)
+    n_bin = int(( len(dtraj)-n_term )/ dim_bin)    
+    N = n_bin * dim_bin
+    dtraj_list = np.reshape( dtraj[n_term: n_term+N], (n_bin, dim_bin) )
+    
+    rnd_matrix = np.random.randint(n_bin, size=(n_resample,n_bin))
+
+    dtraj_resample = np.array([ np.reshape( np.array([ dtraj_list[i] for i in rnd_matrix[k] ]), N ) for k in range(n_resample) ])
+    
+    mu = np.array([ tmatrix_estimate_deeptime(dtraj_resample[i], lag=lag, kT=kT, n_term=0, reversible=reversible) for i in range(n_resample) ])
+    
+    return np.sqrt(np.sum((mu - np.mean(mu, axis=0))**2, axis=0)/n_resample)
 

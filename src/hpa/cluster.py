@@ -17,18 +17,17 @@ def nphospho_in_time(input_file, times):
     return n_phospho_arr
 
 
-def condensate_size_from_dbscan(frame, eps=1.0, min_sample=2):
+def condensate_size_from_dbscan(frame, n_particles=30800, eps=1.0, min_sample=2):
     
     positions = frame.particles.position
     db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(positions)
     labels = db.labels_
-    values, counts = np.unique(labels[:30800], return_counts=True)
-    condensate_idx = values[np.argmax(counts)]
+    values, counts = np.unique(labels[:n_particles], return_counts=True)
     
     return np.max(counts)
     
     
-def chains_in_condensate(dirpath, file_suffix, n_sims, times, eps=1.0, min_sample=2):
+def chains_in_condensate(dirpath, file_suffix, n_sims, times, n_particles=30800, eps=1.0, min_sample=2):
 
     n_chains_arr = np.zeros(len(times))
     n_phospho_arr = np.zeros(len(times))
@@ -40,7 +39,7 @@ def chains_in_condensate(dirpath, file_suffix, n_sims, times, eps=1.0, min_sampl
             print(len(input_gsd))
             for i, tt in enumerate(tqdm(times)):
                 frame = input_gsd[int(tt)]
-                tmp_nc_5ck1d[i] = condensate_size_from_dbscan(frame, eps, min_sample)/154.
+                tmp_nc_5ck1d[i] = condensate_size_from_dbscan(frame, n_particles, eps, min_sample)/154.
                 tmp_np_5ck1d[i] = np.sum(frame.particles.typeid==20)
         n_chains_arr += tmp_nc_5ck1d
         n_phospho_arr += tmp_np_5ck1d
@@ -51,6 +50,104 @@ def chains_in_condensate(dirpath, file_suffix, n_sims, times, eps=1.0, min_sampl
     return n_chains_arr, n_phospho_arr
     
     
+    
+def clusters_size_from_dbscan(frame, n_particles=30800, n_chains=200, eps=1.0, min_sample=2):
+    
+    positions = frame.particles.position
+    db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(positions)
+    labels = db.labels_
+    values, counts = np.unique(labels[:n_particles], return_counts=True)
+    nchains_arr = np.zeros(n_chains)
+    nchains_arr[:len(counts)] = counts
+    
+    return nchains_arr
+    
+def chains_in_clusters(dirpath, file_suffix, n_sims, times, n_particles=30800, n_chains=200, eps=1.0, min_sample=2):
+
+    n_chains_arr = np.zeros((len(times), n_chains))
+    
+    for i in range(1,n_sims+1):
+        tmp_nc_5ck1d = np.zeros(len(times))
+        with gsd.hoomd.open(dirpath+f'sim{i}_'+file_suffix, 'rb') as input_gsd:
+            print(len(input_gsd))
+            for i, tt in enumerate(tqdm(times)):
+                frame = input_gsd[int(tt)]
+                tmp_nc_5ck1d[i] = clusters_size_from_dbscan(frame, n_particles, n_chains, eps, min_sample)/154.
+        n_chains_arr += tmp_nc_5ck1d
+    
+    n_chains_arr /= n_sims
+
+    return n_chains_arr
+    
+    
+def dbscan_pbc(positions, eps, min_samples, box):
+    """
+    Memory-efficient DBSCAN using cKDTree with periodic boundary conditions.
+    """
+    # Shift coordinates from [-L/2, L/2] → [0, L]
+    positions = (positions + box / 2.0) % box
+
+    N = len(positions)
+
+    
+    # KD-tree with periodic boundary conditions
+    tree = sci.spatial.cKDTree(positions, boxsize=box)
+    
+    # Query neighbors within eps for all points
+    neighbors = tree.query_ball_tree(tree, eps)
+
+    labels = np.full(N, -1, dtype=int)
+    cluster_id = 0
+
+    visited = np.zeros(N, dtype=bool)
+
+    for i in range(N):
+        if visited[i]:
+            continue
+        visited[i] = True
+
+        # Points within eps
+        nbrs = neighbors[i]
+
+        # Not a core point
+        if len(nbrs) < min_samples:
+            continue
+
+        # Start new cluster
+        labels[i] = cluster_id
+        queue = list(nbrs)
+
+        while queue:
+            j = queue.pop()
+            if not visited[j]:
+                visited[j] = True
+                nbrs_j = neighbors[j]
+                if len(nbrs_j) >= min_samples:
+                    queue.extend(nbrs_j)
+
+            if labels[j] == -1:
+                labels[j] = cluster_id
+
+        cluster_id += 1
+
+    return labels
+
+def clusters_size_from_dbscan_pbc_fast(frame, box,
+                                       n_particles=30800, n_chains=200,
+                                       eps=1.0, min_sample=2):
+    
+    positions = frame.particles.position
+    
+    # Run memory-efficient DBSCAN with PBC
+    labels = dbscan_pbc(positions, eps, min_sample, box)
+
+    # Count cluster sizes
+    _, counts = np.unique(labels[:n_particles], return_counts=True)
+
+    result = np.zeros(n_chains, dtype=int)
+    result[:len(counts)] = counts
+    return result
+
 
 def condensate_size_from_dbscan_pbc(frame, box, eps=1.0, min_sample=2):
     

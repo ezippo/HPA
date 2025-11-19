@@ -428,20 +428,32 @@ def _process_trajectory(input_file, output_file, diss_time, therm=0, center_id=3
                 output_gsd.append(frame)
                 
                 
-def modify_particles_position(complete_frame, position_frame, id_init_compl=0, id_end_compl=None, id_init_pos=0, id_end_pos=None, save=None):
+def modify_particles_position(complete_frame, position_frame, id_init_compl=0, id_end_compl=None, id_init_pos=0, id_end_pos=None, position_box=False, velocities=True, save=None):
 
     if id_end_pos==None:
         id_end_pos = position_frame.particles.N
     if id_end_compl==None:
         id_end_compl = id_init_compl+(id_end_pos-id_init_pos)
         
-    complete_frame.particles.position[id_init_compl:id_end_compl] = position_frame.particles.position[id_init_pos:id_end_pos] 
+    new_frame = copy.deepcopy(complete_frame)
     
+    new_frame.particles.position[id_init_compl:id_end_compl] = position_frame.particles.position[id_init_pos:id_end_pos] 
+    if velocities:
+        new_frame.particles.velocity[id_init_compl:id_end_compl] = position_frame.particles.velocity[id_init_pos:id_end_pos] 
+    if position_box:
+        new_frame.configuration.box = position_frame.configuration.box.copy()
+        Lx = position_frame.configuration.box[0]
+        Ly = position_frame.configuration.box[1]
+        Lz = position_frame.configuration.box[2]
+        new_frame.particles.position[:, 0] = ((new_frame.particles.position[:, 0] + 0.5 * Lx) % Lx) - 0.5 * Lx
+        new_frame.particles.position[:, 1] = ((new_frame.particles.position[:, 1] + 0.5 * Ly) % Ly) - 0.5 * Ly
+        new_frame.particles.position[:, 2] = ((new_frame.particles.position[:, 2] + 0.5 * Lz) % Lz) - 0.5 * Lz
+
     if save is None:
-        return complete_frame
+        return new_frame
     else:
         with gsd.hoomd.open(save, 'wb') as f:
-            f.append(complete_frame)
+            f.append(new_frame)
     
     
 def modify_particles_typeid(complete_frame, typeid_frame, id_init_compl=0, id_end_compl=None, id_init_tid=0, id_end_tid=None, save=None):
@@ -458,35 +470,98 @@ def modify_particles_typeid(complete_frame, typeid_frame, id_init_compl=0, id_en
     else:
         with gsd.hoomd.open(save, 'wb') as f:
             f.append(complete_frame)
-    
+
     
 def create_distance_file(filename, id1, id2, mean1=True, therm=0, max_time=None, save=None):
-        
+
     u = mda.Universe(filename)
-    ag = u.atoms               
-    n_atoms = len(ag)
 
-    if max_time is None:
-        end = len(u.trajectory)
-    else:
-        end = max_time
+    # Pre-select atom groups ONCE (much faster than inside loop)
+    ag1 = u.atoms[id1]
+    ag2 = u.atoms[id2]
 
-    n_steps = len(u.trajectory[therm:end])
+    traj = u.trajectory
 
+    start = therm
+    end = len(traj) if max_time is None else max_time
+    n_steps = end - start
+
+    # Pre-allocate output array
     if mean1:
-        dist = np.empty((n_steps,len(id2)))
+        dist = np.empty((n_steps, len(ag2)), dtype=np.float32)
     else:
-        dist = np.empty((n_steps,len(id1),len(id2)))
-    for i,ts in enumerate(tqdm(u.trajectory[therm:end])):
-        aCK1d = u.atoms[id1]   # check molecules order in simulation dump file
-        tdp = u.atoms[id2]
+        dist = np.empty((n_steps, len(ag1), len(ag2)), dtype=np.float32)
+
+    for i, ts in enumerate(tqdm(traj[start:end], total=n_steps)):
+        d = mda.analysis.distances.distance_array(ag1.positions, ag2.positions, box=ts.dimensions)
+
         if mean1:
-            tmp = mda.analysis.distances.distance_array(aCK1d.positions, tdp, box=u.dimensions)
-            dist[i] = np.mean(tmp, axis=0) 
+            dist[i] = d.mean(axis=0)
         else:
-            dist[i] = mda.analysis.distances.distance_array(aCK1d.positions, tdp, box=u.dimensions)
+            dist[i] = d
 
     if save is not None:
         np.savetxt(save, dist)
-    
+
     return dist
+    
+def compute_density_profile(gsd_file, axis=2, nbins=100, group=None):
+    """
+    Compute the density profile along a specified axis for a centered trajectory.
+
+    Parameters
+    ----------
+    gsd_file : str
+        Path to the GSD trajectory file.
+    axis : int
+        Axis along which to compute the profile: 0=x, 1=y, 2=z.
+    nbins : int
+        Number of bins along the axis.
+    group : list of int or None
+        Particle indices to include. If None, include all particles.
+
+    Returns
+    -------
+    bin_centers : np.ndarray
+        Center coordinates of bins along the axis.
+    density : np.ndarray
+        Average particle density in each bin.
+    """
+    traj = gsd.hoomd.open(gsd_file, 'rb')
+    n_particles = traj[0].particles.N
+
+    if group is None:
+        group = np.arange(n_particles)
+    else:
+        group = np.array(group)
+
+    # Collect all positions along the chosen axis
+    positions = []
+    for frame in traj:
+        pos = frame.particles.position[group, axis]
+        positions.append(pos)
+    positions = np.concatenate(positions)  # all frames
+
+    # Determine bin edges
+    zmin, zmax = positions.min(), positions.max()
+    bins = np.linspace(zmin, zmax, nbins + 1)
+
+    # Compute histogram
+    counts, edges = np.histogram(positions, bins=bins)
+
+    # Convert to density: counts per bin volume
+    bin_width = edges[1] - edges[0]
+    # For a 1D profile along axis, volume = bin_width * box area perpendicular
+    # Approximate box area using first frame
+    box = traj[0].configuration.box[:3]
+    if axis == 0:
+        area = box[1] * box[2]
+    elif axis == 1:
+        area = box[0] * box[2]
+    else:
+        area = box[0] * box[1]
+
+    density = counts / (len(traj) * area * bin_width)  # average over frames
+    bin_centers = 0.5 * (edges[:-1] + edges[1:])
+
+    return bin_centers, density
