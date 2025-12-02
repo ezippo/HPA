@@ -5,6 +5,7 @@ import MDAnalysis as mda
 from matplotlib import pyplot as plt
 from sklearn.cluster import DBSCAN
 import copy
+import freud
 
 def average(sample, n_term=0):
     ''' sample average 
@@ -246,147 +247,175 @@ def unwrap_trajectory(input_gsd, output_gsd):
     traj_out.close()
     
     
-def center_trajectory(input_gsd, output_gsd, group=None, cluster=False, eps=2.0, min_samples=1):
+def periodic_mass_weighted_com(pos, masses, box_lengths):
     """
-    Create a new GSD trajectory with the COM of all particles (or largest cluster) at the origin.
+    Compute mass-weighted COM using circular statistics (PBC-safe)
+    Works for boxes centered at origin [-L/2, L/2]
+    """
+    com = np.zeros(3)
+
+    for dim in range(3):
+        L = box_lengths[dim]
+        theta = 2 * np.pi * pos[:, dim] / L
+
+        sin_sum = np.sum(masses * np.sin(theta))
+        cos_sum = np.sum(masses * np.cos(theta))
+
+        angle = np.arctan2(sin_sum, cos_sum)
+        com[dim] = L * angle / (2 * np.pi)
+
+    return com
+
+
+def largest_cluster_indices(pos, box, cutoff):
+    """Find largest cluster with freud (PBC-aware, fast)"""
+    fbox = freud.box.Box.from_box(box)
+    cluster = freud.cluster.Cluster()
+    cluster.compute((fbox, pos), neighbors={'r_max': cutoff})
+    
+    ids = cluster.cluster_idx
+    unique, counts = np.unique(ids, return_counts=True)
+    largest_id = unique[np.argmax(counts)]
+
+    return np.where(ids == largest_id)[0]
+
+
+def center_trajectory(input_gsd, output_gsd, group=None, cluster=False, cutoff=2.5):
+    """
+    Center largest cluster using mass-weighted periodic COM.
 
     Parameters
     ----------
     input_gsd : str
-        Input GSD trajectory file.
+        Input trajectory.
     output_gsd : str
-        Output GSD trajectory file (centered).
-    group : list of int or None
-        Particle indices to consider. If None, include all particles.
+        Output centered trajectory.
+    group : array-like or None
+        If provided, cluster only these particle indices.
     cluster : bool
         If True, detect clusters and center only the largest cluster.
-    eps : float
-        Maximum distance between two samples for DBSCAN clustering.
-    min_samples : int
-        Minimum number of neighbors for DBSCAN clustering.
+    cutoff : float
+        Distance cutoff for cluster identification.
     """
     traj_in = gsd.hoomd.open(input_gsd, 'rb')
     traj_out = gsd.hoomd.open(output_gsd, 'wb')
 
-    n_particles = traj_in[0].particles.N
-    if group is None:
-        group = np.arange(n_particles)
-    else:
-        group = np.array(group)
-
-    for frame in tqdm(traj_in):
+    for frame in tqdm(traj_in, desc="Centering trajectory"):
         new_frame = copy.deepcopy(frame)
-        pos = new_frame.particles.position
-        img = new_frame.particles.image
+
+        pos = frame.particles.position.copy()
+        masses = frame.particles.mass.copy()
         box = frame.configuration.box
-        Lx, Ly, Lz = box[:3]
+        N = frame.particles.N
 
-        # Unwrap positions to handle clusters across PBCs
-        unwrap_pos = pos + img * np.array([Lx, Ly, Lz])
-        selected_pos = unwrap_pos[group]
-        masses = frame.particles.mass[group]
-
-        # Compute COM (of largest cluster or all)
-        if cluster:
-            db = DBSCAN(eps=eps, min_samples=min_samples).fit(selected_pos)
-            labels = db.labels_
-            unique, counts = np.unique(labels[labels >= 0], return_counts=True)
-            if len(unique) == 0:
-                raise RuntimeError("No clusters detected. Try increasing eps.")
-            largest_label = unique[np.argmax(counts)]
-            cluster_indices = np.where(labels == largest_label)[0]
-            cluster_pos = selected_pos[cluster_indices]
-            cluster_masses = masses[cluster_indices]
-            cm = np.average(cluster_pos, axis=0, weights=cluster_masses)
+        if group is None:
+            group_ = np.arange(N)
         else:
-            cm = np.average(selected_pos, axis=0, weights=masses)
+            group_ = np.array(group)
 
-        # --- Shift COM to origin ---
-        unwrap_pos -= cm
+        group_pos = pos[group_]
+        group_masses = masses[group_]
 
-        # --- Wrap back into box centered at origin (-L/2, L/2) ---
-        pos_wrapped = np.empty_like(unwrap_pos)
-        pos_wrapped[:, 0] = ((unwrap_pos[:, 0] + 0.5 * Lx) % Lx) - 0.5 * Lx
-        pos_wrapped[:, 1] = ((unwrap_pos[:, 1] + 0.5 * Ly) % Ly) - 0.5 * Ly
-        pos_wrapped[:, 2] = ((unwrap_pos[:, 2] + 0.5 * Lz) % Lz) - 0.5 * Lz
+        if cluster:
+            # ---- Identify largest cluster ----
+            cluster_idx_local = largest_cluster_indices(group_pos, box, cutoff)
+            cluster_global_idx = group_[cluster_idx_local]
 
-        # Update frame
-        new_frame.particles.position = pos_wrapped
-        new_frame.particles.image[:] = 0  # reset image flags
+            cluster_pos = pos[cluster_global_idx]
+            cluster_masses = masses[cluster_global_idx]
+            # ---- Compute mass-weighted periodic COM ----
+            com = periodic_mass_weighted_com(cluster_pos, cluster_masses, box[:3])
+        else:
+            com = periodic_mass_weighted_com(group_pos, group_masses, box[:3])
+
+        # ---- Shift everything so COM -> 0 ----
+        pos -= com
+
+        # ---- Wrap back into box ----
+        pos = wrap_positions(pos, box)
+
+        new_frame.particles.position = pos
+        new_frame.particles.image[:] = 0  # consistent reset
 
         traj_out.append(new_frame)
 
     traj_out.close()
-    
 
-def center_trajectory_z(input_gsd, output_gsd, group=None, cluster=False, eps=2.0, min_samples=1):
+
+# ---------- Periodic COM along one axis ----------
+def periodic_mass_weighted_com_1d(pos_1d, masses, L):
     """
-    Center a slab configuration along the z-axis only.
-    Works even if the system percolates in x/y.
+    Compute mass-weighted periodic COM along a single axis [-L/2, L/2].
+    """
+    theta = 2 * np.pi * pos_1d / L
+    s = np.sum(masses * np.sin(theta))
+    c = np.sum(masses * np.cos(theta))
+    com = L * np.arctan2(s, c) / (2 * np.pi)
+    return com
+
+# ---------- Wrap along z only ----------
+def wrap_positions_z(pos, Lz):
+    pos[:, 2] -= np.round(pos[:, 2] / Lz) * Lz
+    return pos
+    
+def center_trajectory_z(input_gsd, output_gsd, group=None, cluster=False, cutoff=2.5):
+    """
+    Center largest cluster along z-axis only using mass-weighted periodic COM.
 
     Parameters
     ----------
     input_gsd : str
-        Input GSD trajectory file.
+        Input trajectory.
     output_gsd : str
-        Output GSD trajectory file (centered).
-    group : list of int or None
-        Particle indices to consider. If None, include all.
+        Output centered trajectory.
+    cutoff : float
+        Distance cutoff for cluster identification.
+    group : array-like or None
+        If provided, consider only these particle indices for clustering.
     cluster : bool
         If True, detect clusters and center only the largest cluster.
-    eps : float
-        Maximum distance between two samples for DBSCAN clustering.
-    min_samples : int
-        Minimum number of neighbors for DBSCAN clustering.
+    cutoff : float
+        Distance cutoff for cluster identification.
     """
-
     traj_in = gsd.hoomd.open(input_gsd, 'rb')
     traj_out = gsd.hoomd.open(output_gsd, 'wb')
 
-    n_particles = traj_in[0].particles.N
-    if group is None:
-        group = np.arange(n_particles)
-    else:
-        group = np.array(group)
-
-    for frame in tqdm(traj_in):
+    for frame in tqdm(traj_in, desc="Centering trajectory along z"):
         new_frame = copy.deepcopy(frame)
 
         pos = frame.particles.position.copy()
-        img = frame.particles.image.copy()
+        masses = frame.particles.mass.copy()
         box = frame.configuration.box
-        Lx, Ly, Lz = box[:3]
+        Lz = box[2]
+        N = frame.particles.N
 
-        # Unwrap along z only (important if slab crosses top/bottom boundary)
-        unwrap_z = pos[:, 2] + img[:, 2] * Lz
-        selected_z = unwrap_z[group]
-        masses = frame.particles.mass[group]
-
-        # --- Find COM along z ---
-        if cluster:
-            # Cluster using only z-coordinates (1D)
-            db = DBSCAN(eps=eps, min_samples=min_samples).fit(selected_z.reshape(-1, 1))
-            labels = db.labels_
-            unique, counts = np.unique(labels[labels >= 0], return_counts=True)
-            if len(unique) == 0:
-                raise RuntimeError("No clusters detected. Try increasing eps.")
-            largest_label = unique[np.argmax(counts)]
-            cluster_indices = np.where(labels == largest_label)[0]
-            cluster_z = selected_z[cluster_indices]
-            cluster_masses = masses[cluster_indices]
-            z_com = np.average(cluster_z, weights=cluster_masses)
+        if group is None:
+            group_ = np.arange(N)
         else:
-            z_com = np.average(selected_z, weights=masses)
+            group_ = np.array(group)
 
-        # --- Shift COM along z to center of box ---
-        unwrap_z -= z_com
+        group_pos = pos[group_]
+        group_masses = masses[group_]
 
-        # Assuming box centered at origin (-Lz/2, +Lz/2)
-        pos_wrapped = pos.copy()
-        pos_wrapped[:, 2] = ((unwrap_z + 0.5 * Lz) % Lz) - 0.5 * Lz
+        if cluster:
+            # --- Identify largest cluster ---
+            cluster_idx_local = largest_cluster_indices(group_pos, box, cutoff)
+            cluster_global_idx = group_[cluster_idx_local]
+            cluster_pos = pos[cluster_global_idx]
+            cluster_masses = masses[cluster_global_idx]
+            # --- Compute mass-weighted periodic COM along z only ---
+            com_z = periodic_mass_weighted_com_1d(cluster_pos[:, 2], cluster_masses, Lz)
+        else:
+            com_z = periodic_mass_weighted_com_1d(group_pos[:, 2], group_masses, Lz)
 
-        # Update positions and reset images
-        new_frame.particles.position = pos_wrapped
+        # --- Shift z positions so COM -> 0 ---
+        pos[:, 2] -= com_z
+
+        # --- Wrap z back into box ---
+        pos = wrap_positions_z(pos, Lz)
+
+        # --- Update frame ---
+        new_frame.particles.position = pos
         new_frame.particles.image[:] = 0
 
         traj_out.append(new_frame)
