@@ -229,6 +229,27 @@ def create_states_trajectory_2enzymes(boundtraj_1, boundtraj_2, phosphotraj, sav
     return states
 
 
+def ck_test(states, lagtimes, reversible=False, n_samples=100, pow_bins=8):
+
+    counts = deeptime.markov.TransitionCountEstimator(lagtime=1, count_mode='effective').fit_fetch(states-1)
+    msm1 = deeptime.markov.msm.BayesianMSM(n_samples=n_samples, n_steps=2**pow_bins, reversible=reversible).fit_fetch(counts)
+    tr_mat = msm1.gather_stats('transition_matrix').mean
+    predicted_t = []
+    estimated_t = []
+    estimated_t_err = []
+    
+    for lagtime in lagtimes:
+        counts = deeptime.markov.TransitionCountEstimator(lagtime=lagtime, count_mode='effective').fit_fetch(states-1)
+        msm_tmp = deeptime.markov.msm.BayesianMSM(n_samples=100, n_steps=20, reversible=reversible).fit_fetch(counts)
+        tr_mat_tmp = msm_tmp.gather_stats('transition_matrix').mean
+        err_tr_mat_tmp = msm_tmp.gather_stats('transition_matrix').std
+        estimated_t.append(tr_mat_tmp)
+        estimated_t_err.append(err_tr_mat_tmp)
+        predicted_t.append(np.linalg.matrix_power(tr_mat,lagtime))
+    
+    return np.array(predicted_t), np.array(estimated_t), np.array(estimated_t_err)
+    
+
 def dmu_estimate(dtraj, lag=1, kT=3*0.831446, n_term=0):
     msm = pyemma.msm.bayesian_markov_model(dtraj, lag=lag, reversible=False)
     t_matrix = msm.transition_matrix
@@ -267,8 +288,8 @@ def dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, n_term=0, reversible=Fals
     return kT*np.log(cycle/anti_cycle)
 
 def dmu_error_estimate(states, lag=1, kT=3*0.831446, pow_bin=0, n_resample=30, n_term=0, reversible=False):
-    tm = tmatrix_estimate_deeptime(states, lag=lag, kT=kT, reversible=reversible)
-    dtm = bootstrap_tmatrix_estimate_deeptime(states, lag=lag, kT=kT, pow_bin=pow_bin, n_resample=n_resample)
+    tm = tmatrix_estimate_deeptime(states[n_term:], lag=lag, kT=kT, reversible=reversible)
+    dtm = bootstrap_tmatrix_estimate_deeptime(states[n_term:], lag=lag, kT=kT, pow_bin=pow_bin, n_resample=n_resample)
     k_f = np.array([tm[0,1],tm[1,2],tm[2,3],tm[3,0]])
     k_b = np.array([tm[1,0],tm[2,1],tm[3,2],tm[0,3]])
     dk_f = np.array([dtm[0,1],dtm[1,2],dtm[2,3],dtm[3,0]])
@@ -281,6 +302,81 @@ def dmu_error_estimate(states, lag=1, kT=3*0.831446, pow_bin=0, n_resample=30, n
     d_dmu = kT*d_ratio/ratio
     
     return dmu, d_dmu
+    
+
+def dmu_error_estimate_general(states, cycle, lag=1, kT=3 * 0.831446, pow_bin=0, n_resample=30, n_term=0, reversible=False):
+    """
+    Compute the free-energy (chemical potential) difference dµ
+    and its uncertainty for an arbitrary cycle in an n-state Markov model.
+
+    Parameters
+    ----------
+    states : array-like
+        Input state trajectory.
+    cycle : list of ints
+        Ordered list of state indices defining the cycle, e.g. [0,1,2,3].
+        The routine automatically closes the cycle.
+    lag : int
+        Lag time for transition matrix estimation.
+    kT : float
+        Thermal energy.
+    pow_bin : int
+        Power for binning in the bootstrap routine.
+    n_resample : int
+        Number of bootstrap resamples.
+    reversible : bool
+        Whether to use the reversible estimator.
+
+    Returns
+    -------
+    dmu : float
+        Free energy difference: kT * log(product(fwd)/product(back)).
+    d_dmu : float
+        Standard uncertainty in dµ.
+    """
+
+    # Ensure cycle closes by appending first element
+    if cycle[0] != cycle[-1]:
+        cycle = list(cycle) + [cycle[0]]
+
+    # Estimate mean transition matrix
+    tm = tmatrix_estimate_deeptime(states[n_term:], lag=lag, kT=kT, reversible=reversible)
+
+    # Bootstrap uncertainties (same shape as tm)
+    dtm = bootstrap_tmatrix_estimate_deeptime(
+        states[n_term:], lag=lag, kT=kT, pow_bin=pow_bin, n_resample=n_resample
+    )
+
+    # Convert cycle into forward/backward index pairs
+    fwd_pairs = list(zip(cycle[:-1], cycle[1:]))
+    bwd_pairs = list(zip(cycle[1:], cycle[:-1]))
+
+    # Extract forward and backward transition probabilities
+    k_f = np.array([tm[i, j] for i, j in fwd_pairs])
+    k_b = np.array([tm[i, j] for i, j in bwd_pairs])
+
+    # Extract bootstrap uncertainties
+    dk_f = np.array([dtm[i, j] for i, j in fwd_pairs])
+    dk_b = np.array([dtm[i, j] for i, j in bwd_pairs])
+
+    # Relative uncertainties
+    rel_f = dk_f / k_f
+    rel_b = dk_b / k_b
+
+    # Cycle ratio
+    ratio = np.prod(k_f) / np.prod(k_b)
+
+    # Propagate uncertainty for a product
+    d_ratio = ratio * np.sqrt(np.sum(rel_f**2 + rel_b**2))
+
+    # Free-energy difference
+    dmu = kT * np.log(ratio)
+
+    # Uncertainty in dµ
+    d_dmu = kT * d_ratio / ratio
+
+    return dmu, d_dmu
+
 
 def bootstrap_dmu_estimate_deeptime(dtraj, lag=1, kT=3*0.831446, pow_bin=0, n_resample=100, n_term=0):
     dim_bin = int(2**pow_bin)

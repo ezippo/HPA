@@ -534,7 +534,7 @@ def create_distance_file(filename, id1, id2, mean1=True, therm=0, max_time=None,
 
     return dist
     
-def compute_density_profile(gsd_file, axis=2, nbins=100, group=None):
+def compute_density_profile(gsd_file, axis=2, nbins=100, group=None, therm=0):
     """
     Compute the density profile along a specified axis for a centered trajectory.
 
@@ -548,6 +548,8 @@ def compute_density_profile(gsd_file, axis=2, nbins=100, group=None):
         Number of bins along the axis.
     group : list of int or None
         Particle indices to include. If None, include all particles.
+    therm : int
+        Number of initial frames to exclude for thermalization.
 
     Returns
     -------
@@ -556,7 +558,7 @@ def compute_density_profile(gsd_file, axis=2, nbins=100, group=None):
     density : np.ndarray
         Average particle density in each bin.
     """
-    traj = gsd.hoomd.open(gsd_file, 'rb')
+    traj = gsd.hoomd.open(gsd_file, 'rb')[therm:]
     n_particles = traj[0].particles.N
 
     if group is None:
