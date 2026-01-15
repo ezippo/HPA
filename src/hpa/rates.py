@@ -217,7 +217,7 @@ def estimator_rate_single_exponential(dirpath, file_suffix, ser_l, n_sims, max_t
     """
 
     # Initialize the array to store contact times
-    times = np.empty((24, 0))
+    times = np.empty((len(ser_l), 0))
 
     # Process each simulation
     for i in range(n_sims):
@@ -237,7 +237,7 @@ def estimator_rate_single_exponential(dirpath, file_suffix, ser_l, n_sims, max_t
             times = np.append(times, t_tmp, axis=1)
 
     # Calculate rates and their uncertainties
-    n_contacts = [len(times[i][times[i] != max_time]) + 1 for i in range(24)]
+    n_contacts = [len(times[i][times[i] != max_time]) + 1 for i in range(len(ser_l))]
     total_time = times.sum(axis=1)
     rates = np.array(n_contacts) / total_time
     d_r = np.sqrt(n_contacts) / total_time
@@ -418,22 +418,67 @@ def histogram_phosphorylation_times(dirpath, file_suffix, ser_idx, n_sims, max_t
     return counts, bins
 
 
-def pSer_per_chain(dirpath, file_suffix, ser_l, n_sims, times, len_prot=154, n_prot=2):
-    
+def pSer_per_chain(dirpath, file_suffix, n_sims, times, len_prot=154, n_prot=2):
+    """
+    Compute average and standard error of the number of phosphorylated Ser residues (ID = 20)
+    per protein chain, across multiple simulations and time frames.
+
+    Parameters
+    ----------
+    dirpath : str
+        Path to the directory containing GSD files.
+    file_suffix : str
+        Suffix used in filenames: sim{#}_{file_suffix}
+    n_sims : int or list of int
+        Number of simulations, or explicit list of simulation indices.
+    times : list/array of ints
+        Frames (by index) to read from each simulation.
+    len_prot : int
+        Length (# of particles) of one protein chain.
+    n_prot : int
+        Number of chains per simulation.
+
+    Returns
+    -------
+    mean_vals : array, shape (len(times),)
+        Mean # of Ser residues per chain over all simulations.
+    stderr_vals : array, shape (len(times),)
+        Standard error of the mean.
+    """
+
+    # Build list of simulation indices
     if isinstance(n_sims, int):
-        sims_list = [s for s in range(n_sims)]
+        sims_list = list(range(1, n_sims + 1))    # 1-based indexing for files
     elif isinstance(n_sims, list):
         sims_list = n_sims
     else:
         raise ValueError('n_sims must be int or list of int!')
-        
-    pSer_per_chain = np.zeros((len(sims_list)*n_prot, len(times)))
+
+    # Storage: one row per (simulation × chain), one column per time point
+    N = len(sims_list) * n_prot
+    pSer_per_chain = np.zeros((N, len(times)))
+
+    # Loop over simulations
     for ns, s in enumerate(sims_list):
-        with gsd.hoomd.open(dirpath+f"/sim{s+1}_{file_suffix}", 'rb') as input_gsd:
+        # Open GSD trajectory for this simulation
+        with gsd.hoomd.open(dirpath + f"/sim{s}_{file_suffix}", 'rb') as input_gsd:
+
+            # Loop over time frames
             for i, tt in enumerate(tqdm(times)):
                 frame = input_gsd[int(tt)]
-                type_ids = frame.particles.typeid[:len_prot*n_prot]
-                pSer_per_chain[ns*n_prot:(ns+1)*n_prot, i] = [ np.sum( type_ids[len_prot*ichain:len_prot*(ichain+1)]==20 ) for ichain in range(n_prot) ]
 
-    return np.mean(pSer_per_chain, axis=0), np.std(pSer_per_chain, axis=0)/np.sqrt(len(sims_list)*n_prot -1)
-    
+                # Extract particle types for all chains
+                type_ids = frame.particles.typeid[:len_prot * n_prot]
+                
+                # Vectorized reshape
+                type_ids = type_ids.reshape(n_prot, len_prot)
+                
+                # Count phosphorylated serines
+                pSer_per_chain[ns*n_prot:(ns+1)*n_prot, i] = np.sum(type_ids == 20, axis=1)
+
+    # Compute mean and standard error of mean across (simulation × chain)
+    mean_vals = np.mean(pSer_per_chain, axis=0)
+    stderr_vals = np.std(pSer_per_chain, axis=0, ddof=1) / np.sqrt(N)
+
+    return mean_vals, stderr_vals
+
