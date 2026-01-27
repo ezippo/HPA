@@ -256,28 +256,28 @@ def enzymes_in_condensate(input_file, times, n_enz, eps=1.0, min_sample=2):
     return n_chains_arr
     
 
-def pSer_dilute_from_dbscan(frame, eps=1.0, min_sample=2):
+def pSer_dilute_from_dbscan(frame, ntdp43=200, len_tdp43=154, eps=1.0, min_sample=2):
     
     positions = frame.particles.position
-    type_ids = frame.particles.typeid[:30800]
+    type_ids = frame.particles.typeid[:len_tdp43*ntdp43]
     
     db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(positions)
     labels = db.labels_
-    values, counts = np.unique(labels[:30800], return_counts=True)
+    values, counts = np.unique(labels[:len_tdp43*ntdp43], return_counts=True)
     condensate_idx = values[np.argmax(counts)]
-    dilute_ids = type_ids[ labels[:30800] != condensate_idx ]
+    dilute_ids = type_ids[ labels[:len_tdp43*ntdp43] != condensate_idx ]
     
-    if len(dilute_ids)%154 == 0:
-        n_chains_dilute = int( len(dilute_ids)/154 )
+    if len(dilute_ids)%len_tdp43 == 0:
+        n_chains_dilute = int( len(dilute_ids)/len_tdp43 )
         print(f'n chains dilute: {n_chains_dilute}')
-        pSer_per_chain = np.array([ np.sum( dilute_ids[154*ichain:154*(ichain+1)]==20 ) for ichain in range(n_chains_dilute) ])
+        pSer_per_chain = np.array([ np.sum( dilute_ids[len_tdp43*ichain:len_tdp43*(ichain+1)]==20 ) for ichain in range(n_chains_dilute) ])
     else:
         raise ValueError(f'Some chains are split between condensate and dilute! {len(dilute_ids)} monomers in dilute.')
              
     return pSer_per_chain
     
 
-def pSer_dilute(input_file, times, eps=1.0, min_sample=2):
+def pSer_dilute(input_file, times, ntdp43=200, len_tdp43=154, eps=1.0, min_sample=2):
 
     mu_pSerdil_arr = np.zeros(len(times))
     sigma_pSerdil_arr = np.zeros(len(times))
@@ -289,13 +289,56 @@ def pSer_dilute(input_file, times, eps=1.0, min_sample=2):
         for i, tt in enumerate(tqdm(times)):
             print(tt)
             frame = input_gsd[int(tt)]
-            pSer_per_dilute_chain = pSer_dilute_from_dbscan(frame, eps, min_sample)
+            pSer_per_dilute_chain = pSer_dilute_from_dbscan(frame, ntdp43, len_tdp43, eps, min_sample)
             n_chainsdil_arr[i] = len(pSer_per_dilute_chain)
             mu_pSerdil_arr[i] = np.mean(pSer_per_dilute_chain)
             sigma_pSerdil_arr[i] = np.std(pSer_per_dilute_chain)
             pSerdil_l.append(pSer_per_dilute_chain)
                         
     return pSerdil_l, mu_pSerdil_arr, sigma_pSerdil_arr, n_chainsdil_arr
+
+
+def pSer_condensate_from_dbscan(frame, ntdp43=200, len_tdp43=154, eps=1.0, min_sample=2):
+    
+    positions = frame.particles.position
+    type_ids = frame.particles.typeid[:ntdp43*len_tdp43]
+    
+    db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(positions)
+    labels = db.labels_
+    values, counts = np.unique(labels[:ntdp43*len_tdp43], return_counts=True)
+    condensate_idx = values[np.argmax(counts)]
+    cond_ids = type_ids[ labels[:ntdp43*len_tdp43] == condensate_idx ]
+    
+    if len(cond_ids)%len_tdp43 == 0:
+        n_chains_cond = int( len(cond_ids)/len_tdp43 )
+        print(f'n chains dilute: {n_chains_cond}')
+        pSer_per_chain = np.array([ np.sum( cond_ids[len_tdp43*ichain:len_tdp43*(ichain+1)]==20 ) for ichain in range(n_chains_cond) ])
+    else:
+        raise ValueError(f'Some chains are split between condensate and dilute! {len(cond_ids)} monomers in dilute.')
+             
+    return pSer_per_chain
+    
+
+def pSer_condensate(input_file, times, ntdp43=200, len_tdp43=154, eps=1.0, min_sample=2):
+
+    mu_pSercond_arr = np.zeros(len(times))
+    sigma_pSercond_arr = np.zeros(len(times))
+    n_chainscond_arr = np.zeros(len(times))
+    pSercond_l = []
+    
+    with gsd.hoomd.open(input_file, 'rb') as input_gsd:
+        print(len(input_gsd))
+        for i, tt in enumerate(tqdm(times)):
+            print(tt)
+            frame = input_gsd[int(tt)]
+            pSer_per_cond_chain = pSer_condensate_from_dbscan(frame, ntdp43, len_tdp43, eps, min_sample)
+            n_chainscond_arr[i] = len(pSer_per_cond_chain)
+            mu_pSercond_arr[i] = np.mean(pSer_per_cond_chain)
+            sigma_pSercond_arr[i] = np.std(pSer_per_cond_chain)
+            pSercond_l.append(pSer_per_cond_chain)
+                        
+    return pSercond_l, mu_pSercond_arr, sigma_pSercond_arr, n_chainscond_arr
+
 
 
 def radial_distribution_pSer_from_dbscan(frame, bin_edges, nenz, norm_particles, eps, min_sample):

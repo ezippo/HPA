@@ -6,6 +6,9 @@ from matplotlib import pyplot as plt
 from sklearn.cluster import DBSCAN
 import copy
 import freud
+from collections import defaultdict
+from tqdm import tqdm
+
 
 def average(sample, n_term=0):
     ''' sample average 
@@ -574,7 +577,8 @@ def compute_density_profile(gsd_file, axis=2, nbins=100, group=None, therm=0):
     positions = np.concatenate(positions)  # all frames
 
     # Determine bin edges
-    zmin, zmax = positions.min(), positions.max()
+    L = traj[0].configuration.box[axis]
+    zmin, zmax = -L/2, L/2
     bins = np.linspace(zmin, zmax, nbins + 1)
 
     # Compute histogram
@@ -596,3 +600,360 @@ def compute_density_profile(gsd_file, axis=2, nbins=100, group=None, therm=0):
     bin_centers = 0.5 * (edges[:-1] + edges[1:])
 
     return bin_centers, density
+    
+       
+def compute_density_profile_by_npSer(gsd_file, n_chains=200, beads_per_chain=154, axis=2, nbins=100, therm=0):
+    """
+    Compute the density profile along a specified axis for a centered condensate trajectory,
+    splitting contributions by chains with different numbers of phospho-serine beads.
+
+    Assumptions
+    -----------
+    - Trajectory is already centered (condensate COM at z = 0)
+    - Box is centered at the origin: axis in [-Lz/2, Lz/2)
+    - Chains are stored contiguously in the particle list
+    - All chains have the same number of beads
+    - Phospho-serine beads have type name "SEP"
+
+    Parameters
+    ----------
+    gsd_file : str
+        Path to the centered GSD trajectory.
+    n_chains : int
+        Number of polymer chains.
+    beads_per_chain : int
+        Number of beads per chain.
+    axis : int
+        Number of the axis of the slab (0->'x' , 1->'y' , 2->'z').
+    nbins : int
+        Number of bins along z.
+    therm : int
+        Number of initial frames to discard (thermalization).
+
+    Returns
+    -------
+    z_centers : np.ndarray, shape (nbins,)
+        Bin centers along z.
+    density_profiles : dict
+        density_profiles[n_pSer] -> number density profile along z.
+    """
+
+    traj = gsd.hoomd.open(gsd_file, 'rb')
+    frame0 = traj[0]
+
+    N = frame0.particles.N
+    box = frame0.configuration.box
+    Lz = box[axis]
+    zmin, zmax = -Lz / 2, Lz / 2
+
+    # ---- binning ----
+    bins = np.linspace(zmin, zmax, nbins + 1)
+    z_centers = 0.5 * (bins[:-1] + bins[1:])
+    dz = bins[1] - bins[0]
+
+    # ---- determine chain phospho content ----
+    chain_ids = np.repeat(np.arange(n_chains), beads_per_chain)
+    types = frame0.particles.types
+    typeid = frame0.particles.typeid
+    pser_type_id = types.index("SEP")
+    is_phospho = (typeid == pser_type_id)
+
+    # ---- count phospho beads per chain ----
+    phospho_per_chain = {
+        c: np.sum(is_phospho[chain_ids == c])
+        for c in range(n_chains)
+    }
+
+    # ---- map each particle to its chain class ----
+    particle_class = np.array(
+        [phospho_per_chain[c] for c in chain_ids]
+    )
+
+    # ---- storage ----
+    density_profiles = defaultdict(lambda: np.zeros(nbins))
+    frame_count = 0
+
+    # ---- loop over frames ----
+    for iframe, frame in enumerate(tqdm(traj, desc="Computing density profiles")):
+        if iframe < therm:
+            continue
+
+        z = frame.particles.position[:, axis]
+
+        for n_pSer in np.unique(particle_class):
+            mask = particle_class == n_pSer
+            hist, _ = np.histogram(z[mask], bins=bins)
+            density_profiles[n_pSer] += hist
+
+        frame_count += 1
+
+    # ---- normalize to number density ----
+    if axis == 0:
+        area = box[1] * box[2]
+    elif axis == 1:
+        area = box[0] * box[2]
+    else:
+        area = box[0] * box[1]
+        
+    for n_pSer in density_profiles:
+        density_profiles[n_pSer] /= (frame_count * area * dz)
+    
+    # ---- compute number of chains per class ----
+    chain_counts = {}
+    for n_pSer in np.unique(particle_class):
+        n_particles = np.sum(particle_class == n_pSer)
+        chain_counts[n_pSer] = n_particles // beads_per_chain
+
+    return z_centers, dict(density_profiles), chain_counts
+
+
+def compute_radial_density_by_npSer(gsd_file, n_chains=200, beads_per_chain=154, r_max=None, nbins=100, therm=0):
+    """
+    Compute radial density profiles for a centered spherical condensate,
+    split by number of phospho-serine beads per chain.
+
+    Parameters
+    ----------
+    gsd_file : str
+        Path to GSD trajectory (droplet already centered at origin).
+    n_chains : int
+        Total number of polymer chains.
+    beads_per_chain : int
+        Number of beads per chain (assumed equal).
+    pser_type_name : str
+        Particle type name corresponding to phospho-serine beads.
+    r_max : float or None
+        Maximum radius for the profile. If None, use half smallest box length.
+    nbins : int
+        Number of radial bins.
+    therm : int
+        Number of initial frames to skip.
+
+    Returns
+    -------
+    r_centers : np.ndarray
+        Radial bin centers.
+    density_profiles : dict
+        {n_pSer: radial density profile}
+    chain_counts : dict
+        {n_pSer: number of chains in that class}
+    """
+    traj = gsd.hoomd.open(gsd_file, 'rb')
+    frame0 = traj[0]
+
+    N = frame0.particles.N
+    box = frame0.configuration.box
+    Lx, Ly, Lz = box[:3]
+
+    # ---- radial range ----
+    if r_max is None:
+        r_max = 0.5 * min(Lx, Ly, Lz)
+
+    bins = np.linspace(0, r_max, nbins + 1)
+    r_centers = 0.5 * (bins[:-1] + bins[1:])
+    dr = bins[1] - bins[0]
+
+    # ---- shell volumes ----
+    shell_volumes = (4/3) * np.pi * (bins[1:]**3 - bins[:-1]**3)
+
+    # ---- chain IDs (static topology) ----
+    chain_ids = np.repeat(np.arange(n_chains), beads_per_chain)
+
+    # ---- identify phospho beads ----
+    types = frame0.particles.types
+    typeid = frame0.particles.typeid
+    pser_type_id = types.index("SEP")
+    is_phospho = (typeid == pser_type_id)
+
+    # ---- count phospho beads per chain ----
+    phospho_per_chain = {
+        c: np.sum(is_phospho[chain_ids == c])
+        for c in np.unique(chain_ids)
+    }
+
+    # ---- assign each particle its chain class ----
+    particle_class = np.array([phospho_per_chain[c] for c in chain_ids])
+
+    # ---- count chains per class ----
+    chain_counts = {
+        n_pSer: np.sum(particle_class == n_pSer) // beads_per_chain
+        for n_pSer in np.unique(particle_class)
+    }
+
+    # ---- storage ----
+    density_profiles = defaultdict(lambda: np.zeros(nbins))
+    frame_count = 0
+
+    # ---- loop over frames ----
+    for frame in tqdm(traj[therm:], desc="Computing radial densities"):
+        pos = frame.particles.position
+
+        # radial distance from origin
+        r = np.linalg.norm(pos, axis=1)
+
+        for n_pSer in chain_counts:
+            mask = (particle_class == n_pSer)
+            hist, _ = np.histogram(r[mask], bins=bins)
+            density_profiles[n_pSer] += hist
+
+        frame_count += 1
+
+    # ---- normalize by shell volume and frames ----
+    for n_pSer in density_profiles:
+        density_profiles[n_pSer] /= (frame_count * shell_volumes)
+
+    return r_centers, dict(density_profiles), chain_counts
+
+
+def compute_density_profile_per_frame(z_positions, box_Lz, n_bins):
+    hist, edges = np.histogram(
+        z_positions, bins=n_bins, range=(-box_Lz/2, box_Lz/2)
+    )
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    return centers, hist
+
+
+def find_interfaces(z_centers, density, density_threshold=0.5):
+    """Find top and bottom interface from density profile."""
+    max_rho = np.max(density)
+    mask = density > density_threshold * max_rho
+
+    slab_region = z_centers[mask]
+    z_bottom = slab_region.min()
+    z_top = slab_region.max()
+    return z_bottom, z_top
+    
+def p2_from_bonds(positions, bonds, box_Lz, z_bottom, z_top, d_edges):
+    p2_sum = np.zeros(len(d_edges) - 1)
+    counts = np.zeros(len(d_edges) - 1)
+
+    for a, b in bonds:
+        r1 = positions[a]
+        r2 = positions[b]
+
+        # Bond vector with minimum image in z
+        dz = r2[2] - r1[2]
+        dz -= box_Lz * np.rint(dz / box_Lz)
+
+        dx = r2[0] - r1[0]
+        dy = r2[1] - r1[1]
+        bond = np.array([dx, dy, dz])
+        norm = np.linalg.norm(bond)
+        if norm == 0:
+            continue
+
+        cos_theta = bond[2] / norm
+        p2 = 0.5 * (3 * cos_theta**2 - 1)
+
+        # Bond midpoint z (minimum image)
+        z_mid = r1[2] + 0.5 * dz
+        z_mid -= box_Lz * np.rint(z_mid / box_Lz)
+
+        # Distance from nearest interface
+        d = min(abs(z_mid - z_bottom), abs(z_mid - z_top))
+
+        bin_index = np.digitize(d, d_edges) - 1
+        if 0 <= bin_index < len(p2_sum):
+            p2_sum[bin_index] += p2
+            counts[bin_index] += 1
+
+    return p2_sum, counts
+
+def compute_P2_profile(traj_file, n_bins_orient=100, n_bins_density=200, density_threshold=0.5, mode="distance", save=None):
+    """
+    Compute P2 orientation profile from a HOOMD GSD trajectory.
+
+    Parameters
+    ----------
+    mode : str
+        "distance" → P2 vs distance from nearest interface
+        "z"        → P2 vs absolute z position in box
+    """
+
+    traj = gsd.hoomd.open(traj_file, 'r')
+    first_frame = traj[0]
+    box_Lz = first_frame.configuration.box[2]
+
+    # ----- Define bins depending on mode -----
+    if mode == "distance":
+        x_min, x_max = 0, box_Lz / 2
+        xlabel = "distance_from_interface"
+    elif mode == "z":
+        x_min, x_max = -box_Lz / 2, box_Lz / 2
+        xlabel = "z_position"
+    else:
+        raise ValueError("mode must be 'distance' or 'z'")
+
+    # Allow n_bins_orient to be either int or array of bin edges
+    if np.isscalar(n_bins_orient):
+        edges = np.linspace(x_min, x_max, int(n_bins_orient) + 1)
+    else:
+        edges = np.asarray(n_bins_orient)
+
+        if edges.ndim != 1 or len(edges) < 2:
+            raise ValueError("Custom bins must be a 1D array of bin edges")
+
+        # Optional sanity checks
+        if mode == "distance" and (edges.min() < 0 or edges.max() > box_Lz / 2):
+            raise ValueError("Distance bins must lie within [0, Lz/2]")
+        if mode == "z" and (edges.min() < -box_Lz/2 or edges.max() > box_Lz/2):
+            raise ValueError("Z bins must lie within [-Lz/2, Lz/2]")
+
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    n_bins_orient = len(edges) - 1
+
+    p2_total = np.zeros(n_bins_orient)
+    counts_total = np.zeros(n_bins_orient)
+
+    # ----- Loop over trajectory -----
+    for frame in tqdm(traj):
+        pos = frame.particles.position.copy()
+
+        # unwrap in z only
+        pos[:, 2] -= box_Lz * np.rint(pos[:, 2] / box_Lz)
+        z = pos[:, 2]
+
+        # --- Find interfaces from density ---
+        z_centers, density = compute_density_profile_per_frame(z, box_Lz, n_bins_density)
+        z_bottom, z_top = find_interfaces(z_centers, density, density_threshold=density_threshold)
+
+        bonds = frame.bonds.group
+
+        # --- Loop over bonds ---
+        for a, b in bonds:
+            r1 = pos[a]
+            r2 = pos[b]
+
+            dz = r2[2] - r1[2]
+            dz -= box_Lz * np.rint(dz / box_Lz)
+
+            dx = r2[0] - r1[0]
+            dy = r2[1] - r1[1]
+            bond = np.array([dx, dy, dz])
+            norm = np.linalg.norm(bond)
+            if norm == 0:
+                continue
+
+            cos_theta = bond[2] / norm
+            p2 = 0.5 * (3 * cos_theta**2 - 1)
+
+            z_mid = r1[2] + 0.5 * dz
+            z_mid -= box_Lz * np.rint(z_mid / box_Lz)
+
+            if mode == "distance":
+                x_val = min(abs(z_mid - z_bottom), abs(z_mid - z_top))
+            else:  # mode == "z"
+                x_val = z_mid
+
+            bin_index = np.digitize(x_val, edges) - 1
+            if 0 <= bin_index < n_bins_orient:
+                p2_total[bin_index] += p2
+                counts_total[bin_index] += 1
+
+    # ----- Final averaging -----
+    P2_profile = np.divide(p2_total, counts_total, where=counts_total > 0)
+
+    if save is not None:
+        np.savetxt(save, np.column_stack([centers, P2_profile]), header=f"{xlabel}  P2")
+
+    return centers, P2_profile
