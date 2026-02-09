@@ -101,14 +101,14 @@ def boundtraj_with_dist_criterion(dist, min_dist=10., max_dist=None, therm=0, en
     return np.array(filtered_dtraj[therm:end])
 
 
-def changes_to_phosphostate(changes, step=10000, end_time=3000000000, save=None):
+def changes_to_phosphostate(changes, start_time=0, step=10000, end_time=3000000000, save=None):
     """
     Determines the phospho-state of a system over time based on recorded changes.
 
     Args:
         changes (ndarray): A numpy array where the first column contains time steps at which 
                            phosphorylation state changes occur.
-        boolstart (int, optional): Initial phospho-state (0 for unphosphorylated, 1 for phosphorylated). 
+        start_time (int, optional): Initial simulation time. 
                                    Defaults to 0.
         step (int, optional): Time step interval to evaluate the phospho-state (usually equal to dump time step). Defaults to 10000.
         end_time (int, optional): Maximum simulation time. Defaults to 3000000000.
@@ -126,13 +126,13 @@ def changes_to_phosphostate(changes, step=10000, end_time=3000000000, save=None)
         boolstart=1
         
     # Calculate initial state based on changes within the first step
-    ch_count = np.sum(changes[index:, 0] <= step)  # Count changes up to `step`
+    ch_count = np.sum(changes[index:, 0] <= start_time+step)  # Count changes up to `step`
     phosphobool.append(int(not boolstart) if ch_count % 2 else boolstart)
     index += ch_count
 
     # Iterate through time steps and compute phospho-state
-    for t in range(1, int(end_time / step)):
-        ch_count = np.sum(changes[index:, 0] <= (t + 1) * step)  # Count changes up to the next step
+    for t in range(1, int((end_time-start_time) / step)):
+        ch_count = np.sum(changes[index:, 0] <= start_time + (t + 1) * step)  # Count changes up to the next step
         if ch_count % 2:
             # Toggle the previous state if an odd number of changes occurred
             phosphobool.append(int(not phosphobool[-1]))
