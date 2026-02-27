@@ -601,6 +601,80 @@ def compute_density_profile(gsd_file, axis=2, nbins=100, group=None, therm=0):
 
     return bin_centers, density
     
+    
+def compute_radial_density_profile(gsd_file, nbins=100, r_max=None, group=None, therm=0):
+    """
+    Compute radial density profile for a centered spherical condensate
+    in a cubic box.
+
+    Parameters
+    ----------
+    gsd_file : str
+        Path to GSD trajectory (droplet must already be centered at origin).
+    nbins : int
+        Number of radial bins.
+    r_max : float or None
+        Maximum radius for profile. If None, use half box length.
+    group : array-like or None
+        Particle indices to include. If None, include all particles.
+    therm : int
+        Number of initial frames to skip.
+
+    Returns
+    -------
+    r_centers : np.ndarray
+        Radial bin centers.
+    density : np.ndarray
+        Radial number density profile.
+    """
+
+    traj = gsd.hoomd.open(gsd_file, 'rb')
+    frame0 = traj[0]
+
+    box = frame0.configuration.box
+    Lx, Ly, Lz = box[:3]
+
+    # ---- Check cubic box ----
+    if not np.isclose(Lx, Ly) or not np.isclose(Lx, Lz):
+        raise ValueError("Box is not cubic. This function assumes cubic box.")
+
+    L = Lx
+
+    # ---- Radial extent ----
+    if r_max is None:
+        r_max = L / 2.0
+
+    bins = np.linspace(0, r_max, nbins + 1)
+    r_centers = 0.5 * (bins[:-1] + bins[1:])
+    shell_volumes = (4.0 / 3.0) * np.pi * (bins[1:]**3 - bins[:-1]**3)
+
+    density = np.zeros(nbins)
+    frame_count = 0
+
+    # ---- Group selection ----
+    if group is not None:
+        group = np.array(group)
+
+    # ---- Loop over frames ----
+    for frame in tqdm(traj[therm:], desc="Computing radial density"):
+
+        pos = frame.particles.position
+
+        if group is not None:
+            pos = pos[group]
+
+        # radial distance from origin
+        r = np.linalg.norm(pos, axis=1)
+
+        hist, _ = np.histogram(r, bins=bins)
+        density += hist
+
+        frame_count += 1
+
+    # ---- Normalize ----
+    density /= (frame_count * shell_volumes)
+
+    return r_centers, density
        
 def compute_density_profile_by_npSer(gsd_file, n_chains=200, beads_per_chain=154, axis=2, nbins=100, therm=0):
     """

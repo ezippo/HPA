@@ -29,14 +29,25 @@ def condensate_size_from_dbscan(frame, n_particles=30800, eps=1.0, min_sample=2)
     
 def chains_in_condensate(dirpath, file_suffix, n_sims, times, n_particles=30800, eps=1.0, min_sample=2):
 
+    # Build list of simulation indices
+    if isinstance(n_sims, int):
+        sims_list = list(range(1, n_sims + 1))    # 1-based indexing for files
+    elif isinstance(n_sims, list):
+        sims_list = n_sims
+    elif n_sims is None:
+        sims_list = ['']
+    else:
+        raise ValueError('n_sims must be int or list of int!')
+    nsims = len(sims_list)
+
     n_chains_arr = np.zeros(len(times))
     n_phospho_arr = np.zeros(len(times))
     
-    for i in range(1,n_sims+1):
+    for s in sims_list:
         tmp_nc_5ck1d = np.zeros(len(times))
         tmp_np_5ck1d = np.zeros(len(times))
-        with gsd.hoomd.open(dirpath+f'sim{i}_'+file_suffix, 'rb') as input_gsd:
-            print(len(input_gsd))
+        with gsd.hoomd.open(dirpath+f'sim{s}_'+file_suffix, 'rb') as input_gsd:
+            print(len(input_gsd), nsims)
             for i, tt in enumerate(tqdm(times)):
                 frame = input_gsd[int(tt)]
                 tmp_nc_5ck1d[i] = condensate_size_from_dbscan(frame, n_particles, eps, min_sample)/154.
@@ -44,8 +55,8 @@ def chains_in_condensate(dirpath, file_suffix, n_sims, times, n_particles=30800,
         n_chains_arr += tmp_nc_5ck1d
         n_phospho_arr += tmp_np_5ck1d
     
-    n_chains_arr /= n_sims
-    n_phospho_arr /= n_sims
+    n_chains_arr /= nsims
+    n_phospho_arr /= nsims
 
     return n_chains_arr, n_phospho_arr
     
