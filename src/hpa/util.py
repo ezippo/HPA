@@ -338,12 +338,122 @@ def center_trajectory(input_gsd, output_gsd, group=None, cluster=False, cutoff=2
         pos = wrap_positions(pos, box)
 
         new_frame.particles.position = pos
-        new_frame.particles.image[:] = 0  # consistent reset
+        #new_frame.particles.image[:] = 0  # consistent reset
 
         traj_out.append(new_frame)
 
     traj_out.close()
 
+
+def wrap_with_images(pos, img, box):
+    """
+    Wrap into HOOMD box [-L/2, L/2) while updating images.
+    """
+
+    L = np.array(box[:3])
+
+    shift = np.floor((pos + 0.5 * L) / L).astype(int)
+
+    pos -= shift * L
+    img += shift
+
+    return pos, img
+
+
+def unwrap_from_images(pos, img, box):
+
+    L = np.array(box[:3])
+
+    return pos + img * L
+
+
+def center_trajectory_correct_images(input_gsd, output_gsd, group=None, cluster=False, cutoff=2.5):
+    """
+    Center trajectory using periodic mass-weighted COM
+    without breaking molecules or losing images.
+
+    Parameters
+    ----------
+    input_gsd : str
+    output_gsd : str
+    group : array-like or None
+    cluster : bool
+    cutoff : float
+    """
+
+    traj_in = gsd.hoomd.open(input_gsd, "rb")
+    traj_out = gsd.hoomd.open(output_gsd, "wb")
+
+    for frame in tqdm(traj_in, desc="Centering trajectory"):
+
+        new_frame = copy.deepcopy(frame)
+
+        pos = frame.particles.position.copy()
+        img = frame.particles.image.copy()
+        masses = frame.particles.mass.copy()
+        box = frame.configuration.box
+        N = frame.particles.N
+
+        # --------------------------
+        # unwrap positions first
+        # --------------------------
+        pos_unwrapped = unwrap_from_images(pos, img, box)
+
+        if group is None:
+            group_ = np.arange(N)
+        else:
+            group_ = np.array(group)
+
+        group_pos = pos_unwrapped[group_]
+        group_masses = masses[group_]
+
+        # --------------------------
+        # cluster detection (optional)
+        # --------------------------
+        if cluster:
+
+            cluster_idx_local = largest_cluster_indices(group_pos,box,cutoff)
+            cluster_global_idx = group_[cluster_idx_local]
+
+            cluster_pos = pos_unwrapped[cluster_global_idx]
+            cluster_masses = masses[cluster_global_idx]
+
+            com = periodic_mass_weighted_com(
+                cluster_pos,
+                cluster_masses,
+                box[:3],
+            )
+
+        else:
+
+            com = periodic_mass_weighted_com(
+                group_pos,
+                group_masses,
+                box[:3],
+            )
+
+        # --------------------------
+        # shift ALL particles
+        # --------------------------
+        pos_unwrapped -= com
+
+        # --------------------------
+        # wrap back consistently
+        # --------------------------
+        pos = pos_unwrapped.copy()
+        img = np.zeros_like(img)
+
+        pos, img = wrap_with_images(pos, img, box)
+
+        # --------------------------
+        # store
+        # --------------------------
+        new_frame.particles.position = pos
+        new_frame.particles.image = img
+
+        traj_out.append(new_frame)
+
+    traj_out.close()
 
 # ---------- Periodic COM along one axis ----------
 def periodic_mass_weighted_com_1d(pos_1d, masses, L):
