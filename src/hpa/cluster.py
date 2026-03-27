@@ -4,6 +4,7 @@ from scipy.optimize import curve_fit
 from tqdm import tqdm
 import gsd.hoomd
 from sklearn import cluster as cl
+import freud 
 import scipy as sci
 
 def nphospho_in_time(input_file, times):
@@ -26,8 +27,23 @@ def condensate_size_from_dbscan(frame, n_particles=30800, eps=1.0, min_sample=2)
     
     return np.max(counts)
     
+def condensate_size_with_freud(frame, n_particles=30800, cutoff=1.0, n_clusters=1):
     
-def chains_in_condensate(dirpath, file_suffix, n_sims, times, n_particles=30800, eps=1.0, min_sample=2):
+    box_f = freud.box.Box.from_box(frame.configuration.box)
+    positions = frame.particles.position
+    freudcl = freud.cluster.Cluster()
+
+    _ = freudcl.compute((box_f, positions), neighbors={'r_max': cutoff})
+    labels = freudcl.cluster_idx
+    values, counts = np.unique(labels[:n_particles], return_counts=True)
+    largest = np.sort(counts)[::-1][:n_clusters]
+    
+    if n_clusters == 1:
+        return largest[0]
+    else:
+        return largest
+    
+def chains_in_condensate(dirpath, file_suffix, n_sims, times, n_particles=30800, cutoff=1.0, n_clusters=1):
 
     # Build list of simulation indices
     if isinstance(n_sims, int):
@@ -40,20 +56,25 @@ def chains_in_condensate(dirpath, file_suffix, n_sims, times, n_particles=30800,
         raise ValueError('n_sims must be int or list of int!')
     nsims = len(sims_list)
 
-    n_chains_arr = np.zeros(len(times))
+    n_chains_arr = np.zeros((len(times), n_clusters))
     n_phospho_arr = np.zeros(len(times))
     
     for s in sims_list:
-        tmp_nc_5ck1d = np.zeros(len(times))
-        tmp_np_5ck1d = np.zeros(len(times))
+        tmp_nc = np.zeros((len(times), n_clusters))
+        tmp_np = np.zeros(len(times))
         with gsd.hoomd.open(dirpath+f'sim{s}_'+file_suffix, 'rb') as input_gsd:
             print(len(input_gsd), nsims)
             for i, tt in enumerate(tqdm(times)):
                 frame = input_gsd[int(tt)]
-                tmp_nc_5ck1d[i] = condensate_size_from_dbscan(frame, n_particles, eps, min_sample)/154.
-                tmp_np_5ck1d[i] = np.sum(frame.particles.typeid==20)
-        n_chains_arr += tmp_nc_5ck1d
-        n_phospho_arr += tmp_np_5ck1d
+                sizes = condensate_size_with_freud(frame, n_particles, cutoff, n_clusters)
+                if n_clusters == 1:
+                    tmp_nc[i, 0] = sizes / 154.0
+                else:
+                    tmp_nc[i, : len(sizes)] = sizes / 154.0
+
+                tmp_np[i] = np.sum(frame.particles.typeid==20)
+        n_chains_arr += tmp_nc
+        n_phospho_arr += tmp_np
     
     n_chains_arr /= nsims
     n_phospho_arr /= nsims
@@ -90,124 +111,6 @@ def chains_in_clusters(dirpath, file_suffix, n_sims, times, n_particles=30800, n
 
     return n_chains_arr
     
-    
-def dbscan_pbc(positions, eps, min_samples, box):
-    """
-    Memory-efficient DBSCAN using cKDTree with periodic boundary conditions.
-    """
-    # Shift coordinates from [-L/2, L/2] → [0, L]
-    positions = (positions + box / 2.0) % box
-
-    N = len(positions)
-
-    
-    # KD-tree with periodic boundary conditions
-    tree = sci.spatial.cKDTree(positions, boxsize=box)
-    
-    # Query neighbors within eps for all points
-    neighbors = tree.query_ball_tree(tree, eps)
-
-    labels = np.full(N, -1, dtype=int)
-    cluster_id = 0
-
-    visited = np.zeros(N, dtype=bool)
-
-    for i in range(N):
-        if visited[i]:
-            continue
-        visited[i] = True
-
-        # Points within eps
-        nbrs = neighbors[i]
-
-        # Not a core point
-        if len(nbrs) < min_samples:
-            continue
-
-        # Start new cluster
-        labels[i] = cluster_id
-        queue = list(nbrs)
-
-        while queue:
-            j = queue.pop()
-            if not visited[j]:
-                visited[j] = True
-                nbrs_j = neighbors[j]
-                if len(nbrs_j) >= min_samples:
-                    queue.extend(nbrs_j)
-
-            if labels[j] == -1:
-                labels[j] = cluster_id
-
-        cluster_id += 1
-
-    return labels
-
-def clusters_size_from_dbscan_pbc_fast(frame, box,
-                                       n_particles=30800, n_chains=200,
-                                       eps=1.0, min_sample=2):
-    
-    positions = frame.particles.position
-    
-    # Run memory-efficient DBSCAN with PBC
-    labels = dbscan_pbc(positions, eps, min_sample, box)
-
-    # Count cluster sizes
-    _, counts = np.unique(labels[:n_particles], return_counts=True)
-
-    result = np.zeros(n_chains, dtype=int)
-    result[:len(counts)] = counts
-    return result
-
-
-def condensate_size_from_dbscan_pbc(frame, box, eps=1.0, min_sample=2):
-    
-    positions = frame.particles.position
-
-    # Compute square distance matrix for all the selected particles
-    total = []
-    for d in range(positions.shape[1]):
-        # Find all the 1-D distances
-        pd = sci.spatial.distance.pdist(positions[:, d].reshape(positions.shape[0], 1))
-        # Apply PBC
-        pd[pd > box[d]*0.5] -= box[d]
-        try:
-            # Sum up individual components
-            total += pd**2
-        except Exception as e:
-            # or define the sum variable if not defined previously
-            total = pd ** 2
-    # Transform the condensed distance matrix
-    total = np.sqrt(total)
-    # Transform into a square distance matrix
-    square = sci.spatial.distance.squareform(total)
-    print('hello')
-    db = cl.DBSCAN(eps=eps, min_samples=min_sample).fit(square)
-    labels = db.labels_
-    values, counts = np.unique(labels[:30800], return_counts=True)
-    condensate_idx = np.argmax(counts)
-    
-    if np.array_equal(labels[30800:30803],[values[condensate_idx]]*3):
-        return counts[condensate_idx]
-    else:
-        print(labels[30800:30803],[condensate_idx])
-
-        return 0
-
-
-def chains_in_condensate_pbc(input_file, times, eps=1.0, min_sample=2):
-
-    n_chains_arr = np.zeros(len(times))
-    with gsd.hoomd.open(input_file, 'rb') as input_gsd:
-        print(len(input_gsd))
-        simBox = input_gsd[0].configuration.box # the production runs are NVT
-
-        for i, tt in enumerate(tqdm(times)):
-            frame = input_gsd[int(tt)]
-            n_p_condensate = condensate_size_from_dbscan_pbc(frame, simBox, eps, min_sample)
-            n_chains_arr[i] = n_p_condensate/154.
-    return n_chains_arr
-
 
 def condensate_helix_size_from_dbscan(frame, n_enz, eps=1.0, min_sample=2):
     
