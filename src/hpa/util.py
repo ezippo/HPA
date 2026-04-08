@@ -614,7 +614,7 @@ def modify_particles_typeid(complete_frame, typeid_frame, id_init_compl=0, id_en
             f.append(complete_frame)
 
     
-def create_distance_file(filename, id1, id2, mean1=True, therm=0, max_time=None, save=None):
+def create_distance_file(filename, id1, id2, mode='minimum', therm=0, max_time=None, save=None):
 
     u = mda.Universe(filename)
 
@@ -629,15 +629,19 @@ def create_distance_file(filename, id1, id2, mean1=True, therm=0, max_time=None,
     n_steps = end - start
 
     # Pre-allocate output array
-    if mean1:
+    if mode=='minimum':
+        dist = np.empty(n_steps, dtype=np.float32)
+    elif mode=='mean1':
         dist = np.empty((n_steps, len(ag2)), dtype=np.float32)
-    else:
+    elif mode==None:
         dist = np.empty((n_steps, len(ag1), len(ag2)), dtype=np.float32)
 
     for i, ts in enumerate(tqdm(traj[start:end], total=n_steps)):
         d = mda.analysis.distances.distance_array(ag1.positions, ag2.positions, box=ts.dimensions)
 
-        if mean1:
+        if mode=='minimum':
+            dist[i] = d.min()
+        elif mode=='mean1':
             dist[i] = d.mean(axis=0)
         else:
             dist[i] = d
