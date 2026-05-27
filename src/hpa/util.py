@@ -471,7 +471,7 @@ def wrap_positions_z(pos, Lz):
     pos[:, 2] -= np.round(pos[:, 2] / Lz) * Lz
     return pos
     
-def center_trajectory_z(input_gsd, output_gsd, group=None, cluster=False, cutoff=2.5):
+def center_trajectory_z(input_gsd, output_gsd, group=None, cluster=False, cutoff=2.5, therm=0):
     """
     Center largest cluster along z-axis only using mass-weighted periodic COM.
 
@@ -490,7 +490,7 @@ def center_trajectory_z(input_gsd, output_gsd, group=None, cluster=False, cutoff
     cutoff : float
         Distance cutoff for cluster identification.
     """
-    traj_in = gsd.hoomd.open(input_gsd, 'rb')
+    traj_in = gsd.hoomd.open(input_gsd, 'rb')[therm:]
     traj_out = gsd.hoomd.open(output_gsd, 'wb')
 
     for frame in tqdm(traj_in, desc="Centering trajectory along z"):
@@ -842,7 +842,7 @@ def compute_density_profile_by_npSer(gsd_file, n_chains=200, beads_per_chain=154
     # ---- determine chain phospho content ----
     chain_ids = np.repeat(np.arange(n_chains), beads_per_chain)
     types = frame0.particles.types
-    typeid = frame0.particles.typeid
+    typeid = frame0.particles.typeid[:n_chains*beads_per_chain]
     pser_type_id = types.index("SEP")
     is_phospho = (typeid == pser_type_id)
 
@@ -866,7 +866,7 @@ def compute_density_profile_by_npSer(gsd_file, n_chains=200, beads_per_chain=154
         if iframe < therm:
             continue
 
-        z = frame.particles.position[:, axis]
+        z = frame.particles.position[:n_chains*beads_per_chain, axis]
 
         for n_pSer in np.unique(particle_class):
             mask = particle_class == n_pSer
@@ -929,7 +929,6 @@ def compute_radial_density_by_npSer(gsd_file, n_chains=200, beads_per_chain=154,
     traj = gsd.hoomd.open(gsd_file, 'rb')
     frame0 = traj[0]
 
-    N = frame0.particles.N
     box = frame0.configuration.box
     Lx, Ly, Lz = box[:3]
 
@@ -949,7 +948,7 @@ def compute_radial_density_by_npSer(gsd_file, n_chains=200, beads_per_chain=154,
 
     # ---- identify phospho beads ----
     types = frame0.particles.types
-    typeid = frame0.particles.typeid
+    typeid = frame0.particles.typeid[:n_chains*beads_per_chain]
     pser_type_id = types.index("SEP")
     is_phospho = (typeid == pser_type_id)
 
@@ -974,7 +973,7 @@ def compute_radial_density_by_npSer(gsd_file, n_chains=200, beads_per_chain=154,
 
     # ---- loop over frames ----
     for frame in tqdm(traj[therm:], desc="Computing radial densities"):
-        pos = frame.particles.position
+        pos = frame.particles.position[:n_chains*beads_per_chain]
 
         # radial distance from origin
         r = np.linalg.norm(pos, axis=1)
