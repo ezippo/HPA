@@ -758,11 +758,18 @@ def compute_radial_density_profile(gsd_file, nbins=100, r_max=None, group=None, 
     if r_max is None:
         r_max = L / 2.0
 
-    bins = np.linspace(0, r_max, nbins + 1)
-    r_centers = 0.5 * (bins[:-1] + bins[1:])
-    shell_volumes = (4.0 / 3.0) * np.pi * (bins[1:]**3 - bins[:-1]**3)
+    if isinstance(nbins, int):
+        bins_l = np.linspace(0, r_max, nbins + 1)
+    elif isinstance(nbins, list) or isinstance(nbins, np.ndarray):
+        bins_l = nbins
+    else:
+        raise TypeError("nbins is not int or list or numpy array.")
+    n_bins = len(bins_l)-1
+        
+    r_centers = 0.5 * (bins_l[:-1] + bins_l[1:])
+    shell_volumes = (4.0 / 3.0) * np.pi * (bins_l[1:]**3 - bins_l[:-1]**3)
 
-    density = np.zeros(nbins)
+    density = np.zeros(n_bins)
     frame_count = 0
 
     # ---- Group selection ----
@@ -780,7 +787,7 @@ def compute_radial_density_profile(gsd_file, nbins=100, r_max=None, group=None, 
         # radial distance from origin
         r = np.linalg.norm(pos, axis=1)
 
-        hist, _ = np.histogram(r, bins=bins)
+        hist, _ = np.histogram(r, bins=bins_l)
         density += hist
 
         frame_count += 1
@@ -1046,101 +1053,57 @@ def p2_from_bonds(positions, bonds, box_Lz, z_bottom, z_top, d_edges):
 
     return p2_sum, counts
 
-def compute_P2_profile(traj_file, n_bins_orient=100, n_bins_density=200, density_threshold=0.5, mode="distance", save=None):
+def compute_P2_profile(traj_file, chain_indices, n_bins=100, save=None):
     """
     Compute P2 orientation profile from a HOOMD GSD trajectory.
-
-    Parameters
-    ----------
-    mode : str
-        "distance" → P2 vs distance from nearest interface
-        "z"        → P2 vs absolute z position in box
     """
 
     traj = gsd.hoomd.open(traj_file, 'r')
-    first_frame = traj[0]
-    box_Lz = first_frame.configuration.box[2]
+    first = traj[0]
+    Lz = first.configuration.box[2]
 
-    # ----- Define bins depending on mode -----
-    if mode == "distance":
-        x_min, x_max = 0, box_Lz / 2
-        xlabel = "distance_from_interface"
-    elif mode == "z":
-        x_min, x_max = -box_Lz / 2, box_Lz / 2
-        xlabel = "z_position"
-    else:
-        raise ValueError("mode must be 'distance' or 'z'")
-
-    # Allow n_bins_orient to be either int or array of bin edges
-    if np.isscalar(n_bins_orient):
-        edges = np.linspace(x_min, x_max, int(n_bins_orient) + 1)
-    else:
-        edges = np.asarray(n_bins_orient)
-
-        if edges.ndim != 1 or len(edges) < 2:
-            raise ValueError("Custom bins must be a 1D array of bin edges")
-
-        # Optional sanity checks
-        if mode == "distance" and (edges.min() < 0 or edges.max() > box_Lz / 2):
-            raise ValueError("Distance bins must lie within [0, Lz/2]")
-        if mode == "z" and (edges.min() < -box_Lz/2 or edges.max() > box_Lz/2):
-            raise ValueError("Z bins must lie within [-Lz/2, Lz/2]")
-
+    edges = np.linspace(-Lz/2, Lz/2, n_bins + 1)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    n_bins_orient = len(edges) - 1
 
-    p2_total = np.zeros(n_bins_orient)
-    counts_total = np.zeros(n_bins_orient)
+    p2_sum = np.zeros(n_bins)
+    counts = np.zeros(n_bins)
 
-    # ----- Loop over trajectory -----
     for frame in tqdm(traj):
+
         pos = frame.particles.position.copy()
+        pos[:, 2] -= Lz * np.rint(pos[:, 2] / Lz)
 
-        # unwrap in z only
-        pos[:, 2] -= box_Lz * np.rint(pos[:, 2] / box_Lz)
-        z = pos[:, 2]
+        # --- loop over chains ---
+        for chain in chain_indices:
 
-        # --- Find interfaces from density ---
-        z_centers, density = compute_density_profile_per_frame(z, box_Lz, n_bins_density)
-        z_bottom, z_top = find_interfaces(z_centers, density, density_threshold=density_threshold)
+            coords = pos[chain]
 
-        bonds = frame.bonds.group
+            # ---- compute chain P2 (example: smallest principal axis) ----
+            r_cm = coords.mean(axis=0)
+            dr = coords - r_cm
+            S = np.dot(dr.T, dr) / len(chain)
+            eigvals, eigvecs = np.linalg.eigh(S)
+            u_max = eigvecs[:, -1]
 
-        # --- Loop over bonds ---
-        for a, b in bonds:
-            r1 = pos[a]
-            r2 = pos[b]
+            cos_theta = u_max[2]
+            p2_chain = 0.5 * (3 * cos_theta**2 - 1)
 
-            dz = r2[2] - r1[2]
-            dz -= box_Lz * np.rint(dz / box_Lz)
+            # ---- distribute this chain into bins using bead positions ----
+            z_vals = coords[:, 2]
 
-            dx = r2[0] - r1[0]
-            dy = r2[1] - r1[1]
-            bond = np.array([dx, dy, dz])
-            norm = np.linalg.norm(bond)
-            if norm == 0:
-                continue
+            bin_indices = np.digitize(z_vals, edges) - 1
 
-            cos_theta = bond[2] / norm
-            p2 = 0.5 * (3 * cos_theta**2 - 1)
+            for b in bin_indices:
+                if 0 <= b < n_bins:
+                    p2_sum[b] += p2_chain
+                    counts[b] += 1
 
-            z_mid = r1[2] + 0.5 * dz
-            z_mid -= box_Lz * np.rint(z_mid / box_Lz)
-
-            if mode == "distance":
-                x_val = min(abs(z_mid - z_bottom), abs(z_mid - z_top))
-            else:  # mode == "z"
-                x_val = z_mid
-
-            bin_index = np.digitize(x_val, edges) - 1
-            if 0 <= bin_index < n_bins_orient:
-                p2_total[bin_index] += p2
-                counts_total[bin_index] += 1
-
-    # ----- Final averaging -----
-    P2_profile = np.divide(p2_total, counts_total, where=counts_total > 0)
+    P2_profile = np.divide(p2_sum, counts, where=counts > 0)
 
     if save is not None:
-        np.savetxt(save, np.column_stack([centers, P2_profile]), header=f"{xlabel}  P2")
-
+        np.savetxt(save, np.column_stack([centers, P2_profile]),
+                   header="z  P2_chain_bead_weighted")
+                   
     return centers, P2_profile
+    
+
