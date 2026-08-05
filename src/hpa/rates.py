@@ -245,7 +245,7 @@ def estimator_rate_single_exponential(dirpath, file_suffix, ser_l, n_sims, max_t
     return rates, d_r
 
 
-def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, len_prot=154, n_prot=1, start=None, end=None, max_dist=None, nenz=[1]):
+def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, len_prot=154, n_prot=1, start=None, end=None, max_dist=None, nenz=None):
     """
     Counts the number of contacts (or specific kinds of contacts) in simulations.
 
@@ -264,18 +264,14 @@ def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, le
         tuple: The average count of contacts across simulations and the standard error of the counts.
     """
 
-    if len(nenz)==2:
-        counts1 = []
-        counts2 = []
-    else:
-        counts = []
-        
     if isinstance(n_sims, int):
         sims_list = [s for s in range(n_sims)]
     elif isinstance(n_sims, list):
         sims_list = n_sims
     else:
         raise ValueError('n_sims must be int or list of int!')
+        
+    counts = []
     for s in sims_list:
         tmp = np.loadtxt(dirpath+f"/sim{s+1}_{file_suffix}", ndmin=2)
         
@@ -293,39 +289,19 @@ def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, le
         if max_dist is not None:
             tmp = tmp[tmp[:, 3] < max_dist]
             
-        if len(nenz)==2:
-            tmp1 = tmp[tmp[:, 5]<nenz[0]]
-            tmp2 = tmp[tmp[:, 5]>=nenz[0]]
-            # Calculate the number of contacts for each serial in ser_l across proteins
-            sim_counts1 = [
-                sum(len(np.where(tmp1[:, 1] == i + len_prot * j )[0]) for j in range(n_prot))
-                for i in ser_l
-                ]
-            sim_counts2 = [
-                sum(len(np.where(tmp2[:, 1] == i + len_prot * j )[0]) for j in range(n_prot))
-                for i in ser_l
-                ]
-            counts1.append(sim_counts1)
-            counts2.append(sim_counts2)
-        else:
-            # Calculate the number of contacts for each serial in ser_l across proteins
-            sim_counts = [
-                sum(len(np.where(tmp[:, 1] == i + len_prot * j )[0]) for j in range(n_prot))
-                for i in ser_l
-                ]
-            counts.append(sim_counts)
+        if nenz is not None and isinstance(nenz, list):
+            tmp = tmp[np.isin(tmp[:, 5], nenz)]
+            
+        # Calculate the number of contacts for each serial in ser_l across proteins
+        sim_counts = [
+            sum(len(np.where(tmp[:, 1] == i + len_prot * j )[0]) for j in range(n_prot))
+            for i in ser_l
+            ]
+        counts.append(sim_counts)
         
-    # Calculate the average count and the standard error across simulations
-    if len(nenz)==2:
-        count_average1 = np.mean(counts1, axis=0)
-        count_err1 = np.std(counts1, axis=0)/np.sqrt(len(sims_list)-1)
-        count_average2 = np.mean(counts2, axis=0)
-        count_err2 = np.std(counts2, axis=0)/np.sqrt(len(sims_list)-1)
-        return (count_average1,count_err1),(count_average2,count_err2)
-    else:
-        count_average = np.mean(counts, axis=0)
-        count_err = np.std(counts, axis=0)/np.sqrt(len(sims_list)-1)
-        return count_average, count_err
+    count_average = np.mean(counts, axis=0)
+    count_err = np.std(counts, axis=0)/np.sqrt(len(sims_list)-1)
+    return count_average, count_err
 
 
 def pcc_compute(xdata, ydata):
