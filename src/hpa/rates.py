@@ -245,7 +245,7 @@ def estimator_rate_single_exponential(dirpath, file_suffix, ser_l, n_sims, max_t
     return rates, d_r
 
 
-def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, len_prot=154, n_prot=1, start=None, end=None, max_dist=None, nenz=None):
+def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, len_prot=154, n_prot=1, start=None, end=None, max_dist=None, nenz=None, reaction_dt=200):
     """
     Counts the number of contacts (or specific kinds of contacts) in simulations.
 
@@ -274,6 +274,38 @@ def count_contacts(dirpath, file_suffix, ser_l, n_sims, type_of_contact=None, le
     counts = []
     for s in sims_list:
         tmp = np.loadtxt(dirpath+f"/sim{s+1}_{file_suffix}", ndmin=2)
+
+        remove = np.zeros(len(tmp), dtype=bool)
+
+        for k in range(len(tmp) - 1):
+
+            t1, bead1, reaction1, enzyme1 = (
+                tmp[k, 0],
+                tmp[k, 1],
+                tmp[k, 2],
+                tmp[k, 5]
+            )
+
+            t2, bead2, reaction2, enzyme2 = (
+                tmp[k + 1, 0],
+                tmp[k + 1, 1],
+                tmp[k + 1, 2],
+                tmp[k + 1, 5]
+            )
+
+            # Same bead + same enzyme + opposite reaction
+            # + exactly reaction_dt MD steps apart
+            if (
+                bead1 == bead2
+                and enzyme1 == enzyme2
+                and abs(reaction1) == 1
+                and reaction1 == -reaction2
+                and abs(t2 - t1) == reaction_dt
+            ):
+                remove[k] = True
+                remove[k + 1] = True
+
+        tmp = tmp[~remove]
         
         # Filter contacts by type if specified
         if type_of_contact is not None:
